@@ -21,10 +21,10 @@ const sha = (b) => crypto.createHash("sha256").update(b).digest("hex");
 function oracle() {
   const text = Buffer.alloc(0x1000);
   for (let i = 0; i < text.length; i += 4) text.writeUInt32LE(0xd503201f, i);
-  text.writeUInt32LE(0x90000000 | (1 << 29), 4);
-  text.writeUInt32LE(0x91000000 | (0x100 << 10), 8);
-  text.writeUInt32LE(0x94000000 | (0x14 / 4), 12);
-  text.writeUInt32LE(0x94000000 | (0x30 / 4), 16);
+  text.writeUInt32LE((0x90000000 | (1 << 29)) >>> 0, 4);
+  text.writeUInt32LE((0x91000000 | (0x100 << 10)) >>> 0, 8);
+  text.writeUInt32LE((0x94000000 | (0x14 / 4)) >>> 0, 12);
+  text.writeUInt32LE((0x94000000 | (0x30 / 4)) >>> 0, 16);
   text.writeUInt32LE((0xd4000001 | (0x0b << 5)) >>> 0, 0x20);
   text.writeUInt32LE(0xd65f03c0, 0x24);
   text.writeUInt32LE(0xd65f03c0, 0x40);
