@@ -11,6 +11,17 @@ export { hex, segmentAt, extractStrings, findXrefs } from "./core.mjs";
 import { RE_TOOLS, listFunctions, callGraphTool, scanSyscallsTool, scanSyscalls, functionAt, SVC_NAMES, findServices, findServicesTool, parseNpdm, npdmTool, scanRtti, findRttiTool, getRelocations, collectSymbols, emitGhidra, emitGhidraJava, emitIda, resolveThunk, scanNameStrings } from "./re.mjs";
 
 export const MAX_CHUNK = 64 * 1024;
+
+// Recent model reads, for the hex viewer's live "reading" animation. Keyed by
+// resolved file path, in raw file-offset space (what the viewer displays).
+const _activity = [];
+let _activitySeq = 0;
+export function recordAccess(file, off, len, kind) {
+  if (off === undefined || off < 0) return;
+  _activitySeq++;
+  _activity.push({ file, off, len: len || 1, kind: kind || "read", seq: _activitySeq });
+  if (_activity.length > 500) _activity.shift();
+}
 export const DEFAULT_SWITCH_BASE = 0x7100000000;
 const STATE_DIR = path.join(os.homedir(), ".binharness");
 
@@ -478,6 +489,12 @@ export const TOOLS = [
   { name: "extract_image", description: "Write the input's decompressed NSO/NRO image to `out` as a flat binary, plus an `out.json` sidecar with segments and symbols for Ghidra/IDA. Refuses an existing binary output path; an existing sidecar can be replaced. The exported bytes remain derived from the input.",
     inputSchema: { type: "object", properties: { path: P, out: { type: "string" }, base: BASE }, required: ["path", "out"] } },
 ];
+TOOLS.push({
+  name: "viewer_activity",
+  description: "Used by the hex viewer UI to animate bytes as they are read; returns read accesses since a sequence number. Not needed for analysis.",
+  inputSchema: { type: "object", properties: { path: { type: "string" }, since: { type: "integer", default: 0 } }, required: ["path"] },
+  annotations: { readOnlyHint: true },
+});
 TOOLS.push(...RE_TOOLS);
 TOOLS.push({
   name: "label_syscalls",
@@ -566,6 +583,12 @@ export function callTool(name, args = {}) {
     return npdmTool(buf, img);
   }
 
+  if (name === "viewer_activity") {
+    const f = resolvePath(args.path), since = args.since || 0;
+    const events = _activity.filter((a) => a.file === f && a.seq > since).map((a) => ({ off: a.off, len: a.len, kind: a.kind, seq: a.seq }));
+    return { content: [{ type: "text", text: `${events.length} read events since ${since}` }], structuredContent: { seq: _activitySeq, events } };
+  }
+
   const file = resolvePath(args.path);
   const head = readRange(file, 0, 0x200);
   const format = detectFormat(head.buf, head.size, file);
@@ -600,6 +623,7 @@ export function callTool(name, args = {}) {
       return text(args.format === "base64" ? b.toString("base64") : hexdump(b, a), { address: a, length: b.length, data: b.toString("base64") });
     }
     const r = readRange(file, args.offset ?? parseNum(args.address) ?? 0, len);
+    recordAccess(file, r.offset, r.buf.length, "read");
     const b64 = r.buf.toString("base64");
     return text(args.format === "base64" ? b64 : hexdump(r.buf, r.offset) || "(no bytes in range)", { path: file, size: r.size, offset: r.offset, length: r.buf.length, data: b64 });
   }
