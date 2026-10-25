@@ -123,6 +123,11 @@ test("export_symbols writes Ghidra and IDA scripts", () => {
     const src = fs.readFileSync(out + suf, "utf8");
     assert.match(src, /nnMain|sub_7100000000/);
   }
+  // Java GhidraScript: class name must equal the file's basename (Ghidra requirement)
+  const javaFile = path.join(home, "export_ghidra.java");
+  const java = fs.readFileSync(javaFile, "utf8");
+  assert.match(java, /public class export_ghidra extends GhidraScript/);
+  assert.match(java, /mk\(\d+L,/);
 });
 
 test("resolveThunk follows a b-veneer to the real target", async () => {

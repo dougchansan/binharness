@@ -31,3 +31,5 @@ romfs/
 *.tar.gz
 *.ghidra.py
 *.ida.py
+*_ghidra.java
+*.names.json

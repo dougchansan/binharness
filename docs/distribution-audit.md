@@ -8,6 +8,12 @@ documentation review. It does not establish authorship of every source line,
 license compliance for an unknown upstream source, or permission to redistribute
 third-party inputs or outputs. See [PROVENANCE.md](../PROVENANCE.md).
 
+The PR subsequently integrated v0.6.6 commit
+`7e45146a7bc2faa853c7d3822673cbe52f15f5a4`, preserving its Java GhidraScript
+exporter and version updates. Export documentation and generated-file exclusions
+cover the Java, Python, and JSON outputs. The starting observations below remain
+tied to the original v0.6.5 snapshot rather than silently changing their scope.
+
 | Surface | Observed scope |
 | --- | --- |
 | Starting Git tree | 22 tracked files. The only non-text file is `docs/screenshot.jpg`. |

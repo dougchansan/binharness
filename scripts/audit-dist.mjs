@@ -40,7 +40,7 @@ export function validatePolicy(policy) {
   return policy;
 }
 
-const forbiddenName = /(?:^|\/)(?:\.env(?:\..*)?|prod\.keys|title\.keys|console\.keys|fw-index\.json|FIRMWARE-(?:INDEX|SERVICES)\.md)$|\.(?:keys|nso|nro|nca|npdm|nsp|xci|rom|iso|gcm|dol|rel|bin|elf|zip|gz|tgz|7z|rar|zst|pem|p12)$/i;
+const forbiddenName = /(?:^|\/)(?:\.env(?:\..*)?|prod\.keys|title\.keys|console\.keys|fw-index\.json|FIRMWARE-(?:INDEX|SERVICES)\.md)$|(?:_ghidra\.java|\.ghidra\.py|\.ida\.py|\.names\.json)$|\.(?:keys|nso|nro|nca|npdm|nsp|xci|rom|iso|gcm|dol|rel|bin|elf|zip|gz|tgz|7z|rar|zst|pem|p12)$/i;
 const keyAssignment = /(?:["']?(?:master_key_[0-9a-f]{2}|titlekek_[0-9a-f]{2}|key_area_key_(?:application|ocean|system)_[0-9a-f]{2}|header_key|device_key|bis_key_[0-9a-f]{2}|title_key)["']?\s*[:=]\s*["']?[0-9a-f]{32,})|(?:^\s*[0-9a-f]{32}\s*=\s*[0-9a-f]{32}\s*$)|\bsk-[A-Za-z0-9]{24,}\b/im;
 
 function binarySignature(data) {

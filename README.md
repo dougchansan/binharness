@@ -25,7 +25,7 @@ A binary-analysis toolkit focused on Nintendo Switch NSO/NRO modules, with raw-b
 | `parse_npdm` | Read the program id, service declarations and syscall allowlist from NPDM ACI0; does not verify ACID signatures or actual runtime activity |
 | `find_rtti` | Find candidate Itanium C++ RTTI names, vtables and method-slot counts from available metadata and relocations |
 | `label_rtti` | Save inferred vtable labels and `<Class>::vf<n>` labels for detected method targets; these are not recovered original method names |
-| `export_symbols` | Export collected function labels, vtable labels and comments as **Ghidra**/**IDA** import scripts or JSON |
+| `export_symbols` | Export collected labels/comments as **Ghidra** Java/Python scripts, an **IDA** Python script, or JSON |
 | `find_xrefs` | Detect supported AArch64 calls, branches and data references to an address |
 | `find_string_refs` | Find matching strings and supported AArch64 references to them |
 | `list_symbols` | Demangled dynsym symbols and your saved labels |
@@ -49,7 +49,18 @@ A binary-analysis toolkit focused on Nintendo Switch NSO/NRO modules, with raw-b
 {"name":"export_symbols","arguments":{"path":"/path/to/main","out":"/path/to/out","format":"both"}}
 ```
 
-Load `out.bin` as a flat AArch64 binary at the base recorded in `out.bin.json` (default `0x7100000000`), then run the generated `out.ghidra.py` or `out.ida.py`. Review labels and import warnings in the destination tool. Function boundaries and labels are analysis hypotheses; indirect calls, missing relocations, optimized code and absent RTTI can reduce coverage.
+For the `out` prefix above, the export formats produce:
+
+| `format` | Output files |
+| --- | --- |
+| `both` (default) | `out_ghidra.java`, `out.ghidra.py`, `out.ida.py` |
+| `ghidra` | `out_ghidra.java`, `out.ghidra.py` |
+| `ida` | `out.ida.py` |
+| `json` | `out.names.json` |
+
+The Java filename and public class name use the sanitized basename of the `out` prefix plus `_ghidra`; the output directory is preserved. For Ghidra, use the Java GhidraScript route to avoid a Python integration dependency. The `.ghidra.py` alternative needs a compatible Ghidra Python integration configured in your installation.
+
+Load `out.bin` as a flat AArch64 binary at the base recorded in `out.bin.json` (default `0x7100000000`), then run `out_ghidra.java` in Ghidra or `out.ida.py` in IDA. Review labels and import warnings in the destination tool. Function boundaries and labels are analysis hypotheses; indirect calls, missing relocations, optimized code and absent RTTI can reduce coverage.
 
 ### Format support and limits
 

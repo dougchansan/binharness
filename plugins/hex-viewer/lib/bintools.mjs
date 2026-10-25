@@ -8,7 +8,7 @@ import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { hex, sext, page, segmentAt, seg, nearestName, decodeRef, extractStrings, findXrefs, warnOnce } from "./core.mjs";
 export { hex, segmentAt, extractStrings, findXrefs } from "./core.mjs";
-import { RE_TOOLS, listFunctions, callGraphTool, scanSyscallsTool, scanSyscalls, functionAt, SVC_NAMES, findServices, findServicesTool, parseNpdm, npdmTool, scanRtti, findRttiTool, getRelocations, collectSymbols, emitGhidra, emitIda, resolveThunk, scanNameStrings } from "./re.mjs";
+import { RE_TOOLS, listFunctions, callGraphTool, scanSyscallsTool, scanSyscalls, functionAt, SVC_NAMES, findServices, findServicesTool, parseNpdm, npdmTool, scanRtti, findRttiTool, getRelocations, collectSymbols, emitGhidra, emitGhidraJava, emitIda, resolveThunk, scanNameStrings } from "./re.mjs";
 
 export const MAX_CHUNK = 64 * 1024;
 export const DEFAULT_SWITCH_BASE = 0x7100000000;
@@ -487,8 +487,8 @@ TOOLS.push({
 });
 TOOLS.push({
   name: "export_symbols",
-  description: "Export collected function labels, RTTI/vtable labels and comments as Ghidra/IDA import scripts or JSON. Runs RTTI/syscall/service labeling first by default (label:false skips those saving passes). Review inferred labels and destination import warnings. Pair with extract_image; load the image at its recorded base. format: ghidra | ida | both (default) | json.",
-  inputSchema: { type: "object", properties: { path: { type: "string" }, out: { type: "string", description: "Output path prefix (e.g. ./ngc). Suffixes .ghidra.py/.ida.py/.names.json are added." }, format: { type: "string", enum: ["ghidra", "ida", "both", "json"], default: "both" }, label: { type: "boolean", description: "Run RTTI/syscall/service labeling first (default true)." }, base: { type: "string" } }, required: ["path", "out"] },
+  description: "Export collected labels/comments as Ghidra Java/Python scripts, an IDA Python script, or JSON. ghidra emits both Java and Python; both (default) also emits IDA. The Java route needs no Python integration. Runs RTTI/syscall/service labeling first unless label:false. Pair with extract_image at its recorded base; review inferred labels and import warnings.",
+  inputSchema: { type: "object", properties: { path: { type: "string" }, out: { type: "string", description: "Output path prefix (e.g. ./out). Ghidra Java uses a sanitized basename/class plus _ghidra.java in the same directory. Other outputs append .ghidra.py, .ida.py or .names.json, according to format." }, format: { type: "string", enum: ["ghidra", "ida", "both", "json"], default: "both" }, label: { type: "boolean", description: "Run RTTI/syscall/service labeling first (default true)." }, base: { type: "string" } }, required: ["path", "out"] },
   annotations: { readOnlyHint: false },
 });
 TOOLS.push({
@@ -750,7 +750,14 @@ export function callTool(name, args = {}) {
     const meta = { name: path.basename(path.dirname(file)) === "." ? path.basename(file) : path.basename(file), base: img.base, buildId: img.buildId };
     const out = resolvePath(args.out), fmt = args.format || "both", written = [];
     const write = (suffix, content) => { const f = out + suffix; if (fs.existsSync(f)) throw new Error(`${f} already exists`); fs.writeFileSync(f, content); written.push(f); };
-    if (fmt === "ghidra" || fmt === "both") write(".ghidra.py", emitGhidra(sym, meta));
+    const writeFile = (f, content) => { if (fs.existsSync(f)) throw new Error(`${f} already exists`); fs.writeFileSync(f, content); written.push(f); };
+    if (fmt === "ghidra" || fmt === "both") {
+      // Ghidra requires the public class name to equal the .java filename, so the
+      // Java script is written as <className>.java (no extra dots), not out+suffix.
+      const cls = (path.basename(out).replace(/[^A-Za-z0-9_]/g, "_").replace(/^(\d)/, "_$1") || "names") + "_ghidra";
+      writeFile(path.join(path.dirname(out), cls + ".java"), emitGhidraJava(sym, meta, cls)); // Java route; no Python dependency
+      write(".ghidra.py", emitGhidra(sym, meta)); // alternative for a configured Ghidra Python integration
+    }
     if (fmt === "ida" || fmt === "both") write(".ida.py", emitIda(sym, meta));
     if (fmt === "json") write(".names.json", JSON.stringify(sym, null, 1));
     const named = sym.functions.filter((f) => !/^sub_/.test(f.name)).length;
