@@ -18,6 +18,8 @@ A binary-analysis toolkit for Nintendo Switch executables and any other file, pa
 | `call_graph` | Callees/callers of a function as a depth-limited tree (recursion marked) |
 | `scan_syscalls` | Decode every `svc #n` into its Horizon kernel call (`SendSyncRequest`, `QueryMemory`, …), grouped |
 | `label_syscalls` | Auto-name every `nn::svc` wrapper (`svcSleepThread`, …) and comment each site; names then flow into disassembly, `list_functions` and `call_graph` |
+| `find_services` | Find Switch IPC service names in rodata (`fsp-srv`, `set:sys`, `nifm:u`, …) and the functions that use each, by reference count |
+| `label_services` | Label referencing functions `use_<service>` and comment the service strings, as persistent annotations |
 | `find_xrefs` | Calls, branches and data refs to an address, with the enclosing function |
 | `find_string_refs` | Strings matching text → the code that uses them (fastest way into unknown code) |
 | `list_symbols` | Demangled dynsym symbols and your saved labels |

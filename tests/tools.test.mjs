@@ -70,3 +70,10 @@ test("label_syscalls names svc wrappers and comments sites", () => {
   // the saved label now shows up in disassembly of the wrapper
   assert.match(run("disassemble", { symbol: "svcSleepThread", count: 2 }), /svcSleepThread:/);
 });
+
+test("find_services runs (fixture has no service names)", () => {
+  assert.match(run("find_services"), /no known IPC service names|IPC services referenced/);
+});
+test("label_services runs without error", () => {
+  assert.match(run("label_services"), /services:/);
+});

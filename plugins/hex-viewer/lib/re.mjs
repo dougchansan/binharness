@@ -2,7 +2,22 @@
 // MOD0/.dynamic parsing, relocation application (RELR + RELA relative),
 // function-boundary recovery, call graph, and syscall scanning.
 // Pure analysis over an image produced by bintools.openImage().
-import { hex, segmentAt } from "./bintools.mjs";
+import { hex, segmentAt, extractStrings, findXrefs } from "./bintools.mjs";
+
+// Known Horizon service namespaces (part before ':') and bare service names.
+// Used to filter rodata strings down to real services with low false positives.
+const SVC_NS = new Set("sm lm fsp fsp-srv ldr ro pm set apm appletAE appletOE hid hidbus irs nvdrv time csrng spl pcv pcie psm bpc gpio i2c uart pwm nfc nfp btdrv bt btm bsd sfdnsres nsd nifm ethc ssl nim ns aoc pctl account acc dauth friends notif bcat erpt eupld lp2p ldn caps grc audout audin audrec audren auddev codecctl hwopus es pl psc lbl nvgpu vi dispdrv disp omm cap ovln prepo mm mmnv ndd npns arp wlan usb jit gsv fatal po pj ssml adraw tlm gpu vsync syncpt vi2 ngc ngct vic ro".split(/\s+/));
+const SVC_NAMES_SET = new Set("sm: lm fsp-srv fsp-pr fsp-ldr nvdrv csrng apm hid irs pcv pcie psm bpc gpio btdrv bt btm nvgpu nim ssl account es lbl wlan mmnv ndd cap pwm".split(/\s+/));
+
+function isServiceName(s) {
+  if (s.length < 2 || s.length > 8) return false;       // Horizon service names are at most 8 bytes
+  if (s.includes("::")) return false;                    // C++ namespace, not a service
+  if (SVC_NAMES_SET.has(s)) return true;
+  const ci = s.indexOf(":");
+  if (ci > 0) return SVC_NS.has(s.slice(0, ci));          // "set:sys" -> namespace "set"
+  if (s.includes("-")) return SVC_NAMES_SET.has(s);       // "fsp-srv" style, must be known
+  return false;
+}
 
 const sext = (v, bits) => (v << (32 - bits)) >> (32 - bits);
 
@@ -176,6 +191,22 @@ export function buildCallGraph(img) {
   return (img._graph = { fwd, rev });
 }
 
+// Find Switch IPC service names in rodata (fsp-srv, set:sys, nifm:u, …) and the
+// code that references each — the services a module registers or connects to.
+export function findServices(img) {
+  const segs = ["rodata", "data"].map((n) => img.segments.find((s) => s.name === n)).filter(Boolean);
+  const strs = [];
+  for (const s of segs) strs.push(...extractStrings(img.data.subarray(s.start, s.start + s.size), img.base + s.start, 2, 2e5));
+  const seen = new Map(); // name -> addr (first)
+  for (const s of strs) if (isServiceName(s.text) && !seen.has(s.text)) seen.set(s.text, s.addr);
+  const addrs = [...seen.values()];
+  const refs = addrs.length ? findXrefs(img, addrs, 5000) : [];
+  const byAddr = new Map();
+  for (const r of refs) (byAddr.get(r.target) || byAddr.set(r.target, []).get(r.target)).push(r);
+  return [...seen.entries()].map(([name, addr]) => ({ name, addr, refs: byAddr.get(addr) || [] }))
+    .sort((a, b) => b.refs.length - a.refs.length || a.name.localeCompare(b.name));
+}
+
 export function scanSyscalls(img) {
   const text = parseDynamic(img).text, d = img.data, dv = new DataView(d.buffer, d.byteOffset);
   const sites = [];
@@ -236,6 +267,18 @@ export function callGraphTool(img, args, resolveAddr) {
   return { content: [{ type: "text", text: header + "\n" + (lines.join("\n") || "(no edges found)") }], structuredContent: { function: f.addr, nodes } };
 }
 
+export function findServicesTool(img, args) {
+  const svcs = findServices(img);
+  const re = args.filter ? new RegExp(args.filter, "i") : null;
+  const rows = re ? svcs.filter((s) => re.test(s.name)) : svcs;
+  const text = rows.length
+    ? `${svcs.length} IPC services referenced:\n` + rows.map((s) =>
+        `  ${s.name.padEnd(10)} str@${s.addr.toString(16)}  ${s.refs.length} ref${s.refs.length === 1 ? "" : "s"}` +
+        (s.refs.length ? `  e.g. ${s.refs.slice(0, 3).map((r) => r.func || r.from.toString(16)).join(", ")}` : "")).join("\n")
+    : "no known IPC service names found in rodata";
+  return { content: [{ type: "text", text }], structuredContent: { services: rows.map((s) => ({ name: s.name, addr: s.addr, refs: s.refs.length })) } };
+}
+
 export function scanSyscallsTool(img, args) {
   const sites = scanSyscalls(img);
   const byNum = new Map();
@@ -255,5 +298,7 @@ export const RE_TOOLS = [
     inputSchema: { type: "object", properties: { path: { type: "string" }, address: { type: "string" }, symbol: { type: "string" }, direction: { type: "string", enum: ["callees", "callers", "both"], default: "callees" }, depth: { type: "integer", default: 2 }, base: { type: "string" } }, required: ["path"] } },
   { name: "scan_syscalls", description: "Find every `svc #n` instruction and decode the Horizon kernel syscall (SendSyncRequest, ConnectToNamedPort, QueryMemory, …), grouped by syscall with example addresses. Reveals what kernel services a module uses.",
     inputSchema: { type: "object", properties: { path: { type: "string" }, base: { type: "string" } }, required: ["path"] } },
+  { name: "find_services", description: "Find Switch IPC service names in rodata (fsp-srv, set:sys, nifm:u, ldr:ro, …) and the functions that reference each one, sorted by reference count. Shows which system services a module registers or talks to.",
+    inputSchema: { type: "object", properties: { path: { type: "string" }, filter: { type: "string", description: "Regex on the service name." }, base: { type: "string" } }, required: ["path"] } },
 ];
 for (const t of RE_TOOLS) t.annotations = { readOnlyHint: true };

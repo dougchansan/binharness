@@ -6,7 +6,7 @@ import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { RE_TOOLS, listFunctions, callGraphTool, scanSyscallsTool, scanSyscalls, functionAt, SVC_NAMES } from "./re.mjs";
+import { RE_TOOLS, listFunctions, callGraphTool, scanSyscallsTool, scanSyscalls, functionAt, SVC_NAMES, findServices, findServicesTool } from "./re.mjs";
 
 export const MAX_CHUNK = 64 * 1024;
 export const DEFAULT_SWITCH_BASE = 0x7100000000;
@@ -563,6 +563,12 @@ TOOLS.push({
   inputSchema: { type: "object", properties: { path: { type: "string" }, base: { type: "string" }, dry_run: { type: "boolean", description: "Preview without saving." } }, required: ["path"] },
   annotations: { readOnlyHint: false },
 });
+TOOLS.push({
+  name: "label_services",
+  description: "Label the functions that reference each IPC service as use_<service> (e.g. use_fsp_srv) and comment the service-name strings. Saved as persistent annotations so names appear in disassemble, list_functions and call_graph.",
+  inputSchema: { type: "object", properties: { path: { type: "string" }, base: { type: "string" }, dry_run: { type: "boolean" } }, required: ["path"] },
+  annotations: { readOnlyHint: false },
+});
 for (const t of TOOLS) t.annotations = { readOnlyHint: !["annotate", "extract_image"].includes(t.name) };
 
 function segData(img, name) {
@@ -759,6 +765,25 @@ export function callTool(name, args = {}) {
     }
     if (!args.dry_run) { saveAnnotations(img, ann); finishSymbols(img); }
     const text = `${sites.length} svc sites: ${labeled} wrapper functions ${args.dry_run ? "would be " : ""}named, ${commented} sites commented.\n` + named.slice(0, 40).join("\n");
+    return { content: [{ type: "text", text }], structuredContent: { labeled, commented } };
+  }
+  if (name === "find_services") return findServicesTool(img, args);
+  if (name === "label_services") {
+    const ann = loadAnnotations(img);
+    const svcs = findServices(img);
+    let labeled = 0, commented = 0; const named = [];
+    for (const s of svcs) {
+      if (ann.comments[s.addr] === undefined) { ann.comments[s.addr] = `service "${s.name}"`; commented++; }
+      // Label a referencing function use_<svc> when it refs exactly one service and is unnamed.
+      for (const r of s.refs) {
+        const f = functionAt(img, r.from); if (!f || ann.labels[f.addr] || img.addrNames.has(f.addr)) continue;
+        const others = svcs.filter((o) => o !== s && o.refs.some((x) => { const g = functionAt(img, x.from); return g && g.off === f.off; }));
+        if (others.length) continue;
+        ann.labels[f.addr] = `use_${s.name.replace(/[^A-Za-z0-9]/g, "_")}`; labeled++; named.push(`${f.addr.toString(16)}  ${ann.labels[f.addr]}`);
+      }
+    }
+    if (!args.dry_run) { saveAnnotations(img, ann); finishSymbols(img); }
+    const text = `${svcs.length} services: ${labeled} functions ${args.dry_run ? "would be " : ""}labeled, ${commented} service strings commented.\n` + named.slice(0, 40).join("\n");
     return { content: [{ type: "text", text }], structuredContent: { labeled, commented } };
   }
   if (name === "list_functions") return listFunctions(img, args);
