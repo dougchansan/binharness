@@ -10,6 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { openImage, extractStrings, hex } from "../plugins/hex-viewer/lib/bintools.mjs";
+import { findServices } from "../plugins/hex-viewer/lib/re.mjs";
 
 function buildIndex(dir) {
   dir = path.resolve(dir);
@@ -24,6 +25,8 @@ function buildIndex(dir) {
       const s = img.segments.find((x) => x.name === sname);
       if (s) strings.push(...extractStrings(img.data.subarray(s.start, s.start + s.size), img.base + s.start, 5, 1e6));
     }
+    let services = [];
+    try { services = findServices(img).map((s) => ({ name: s.name, refs: s.refs.length })); } catch { /* skip */ }
     modules.push({
       title: name,
       buildId: img.buildId,
@@ -31,6 +34,7 @@ function buildIndex(dir) {
       memSize: img.data.length,
       segments: img.segments.map((s) => ({ name: s.name, size: s.size })),
       symbols: img.symbols.length,
+      services,
       strings: strings.map((s) => [s.addr, s.text]),
     });
   }
@@ -67,6 +71,29 @@ function report(index) {
   return lines.join("\n");
 }
 
+// Invert services -> which modules reference them. This is reference-based:
+// a module referencing a service name either registers (serves) or connects to
+// (consumes) it, and the two look the same from the name string alone. So this
+// is a "who touches this service" map, not a proven provider/consumer split.
+// For a service only one module references, that module is almost certainly its
+// server; widely-referenced services (sm:, fsp-srv) are owned elsewhere and the
+// counts just reflect how heavily each caller uses them.
+function servicesReport(index) {
+  const ok = index.modules.filter((m) => !m.error && m.services);
+  const map = new Map(); // service -> [{title, refs}]
+  for (const m of ok) for (const s of m.services) (map.get(s.name) || map.set(s.name, []).get(s.name)).push({ title: m.title, refs: s.refs });
+  const rows = [...map.entries()].map(([name, users]) => ({ name, users: users.sort((a, b) => b.refs - a.refs) }))
+    .sort((a, b) => b.users.length - a.users.length || a.name.localeCompare(b.name));
+  const sole = rows.filter((r) => r.users.length === 1);
+  const lines = [`# Switch firmware IPC service map`, ``, `- Source: \`${index.dir}\``, `- Modules with services: **${ok.length}**  ·  distinct services: **${map.size}**`, ``,
+    `Reference-based: each module listed *references* that service name, whether it serves or connects to it — the name string alone can't tell which. Counts are how many modules touch the service and how many times the top module references it.`, ``,
+    `## Shared services (most widely referenced)`, ``, `| Service | Modules | Heaviest user (refs) |`, `| --- | --- | --- |`];
+  for (const r of rows.filter((x) => x.users.length > 1).slice(0, 40)) lines.push(`| \`${r.name}\` | ${r.users.length} | ${r.users[0].title.slice(-8)} (${r.users[0].refs}) |`);
+  lines.push(``, `## Single-module services (likely that module's own)`, ``, `| Service | Module |`, `| --- | --- |`,
+    ...sole.slice(0, 60).map((r) => `| \`${r.name}\` | ${r.users[0].title.slice(-8)} |`));
+  return lines.join("\n");
+}
+
 const [cmd, arg1, arg2] = process.argv.slice(2);
 if (cmd === "build") {
   const out = arg2 || "fw-index.json";
@@ -83,7 +110,9 @@ if (cmd === "build") {
   }
 } else if (cmd === "report") {
   console.log(report(JSON.parse(fs.readFileSync(arg1, "utf8"))));
+} else if (cmd === "services") {
+  console.log(servicesReport(JSON.parse(fs.readFileSync(arg1, "utf8"))));
 } else {
-  console.log("usage: fw-index build <dumps-dir> [out.json] | search <index.json> <regex> | report <index.json>");
+  console.log("usage: fw-index build <dumps-dir> [out.json] | search <index.json> <regex> | report <index.json> | services <index.json>");
   process.exit(2);
 }
