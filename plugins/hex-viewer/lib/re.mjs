@@ -170,6 +170,32 @@ export function buildFunctions(img) {
   return funcs;
 }
 
+// Follow single-instruction call veneers/thunks to the real target:
+//   b <target>                         (plain tail-branch veneer)
+//   adrp x16,#x ; add x16,x16,#y ; br x16   (range-extension thunk)
+// Returns the ultimate target address (or the input if it isn't a thunk).
+export function resolveThunk(img, addr, maxHops = 4) {
+  const d = img.data, dv = new DataView(d.buffer, d.byteOffset);
+  const at = (a) => { const o = a - img.base; return o >= 0 && o + 4 <= d.length ? dv.getUint32(o, true) : null; };
+  for (let hop = 0; hop < maxHops; hop++) {
+    const w = at(addr);
+    if (w === null) break;
+    if (((w & 0xfc000000) >>> 0) === 0x14000000) { addr = addr + sext(w & 0x3ffffff, 26) * 4; continue; } // b
+    // adrp xN ; add xN,xN,#imm ; br xN
+    if (((w & 0x9f000000) >>> 0) === 0x90000000) {
+      const rd = w & 31, w2 = at(addr + 4), w3 = at(addr + 8);
+      if (w2 !== null && w3 !== null && ((w2 & 0xff800000) >>> 0) === 0x91000000 && ((w2 >>> 5) & 31) === rd && (w2 & 31) === rd
+          && ((w3 & 0xfffffc1f) >>> 0) === 0xd61f0000 && ((w3 >>> 5) & 31) === rd) {
+        const imm = sext((((w >>> 5) & 0x7ffff) << 2) | ((w >>> 29) & 3), 21);
+        const target = (addr - (addr % 4096)) + imm * 4096 + (((w2 >>> 10) & 0xfff) << (((w2 >>> 22) & 1) ? 12 : 0));
+        if (target !== addr) { addr = target; continue; }
+      }
+    }
+    break;
+  }
+  return addr;
+}
+
 export function functionAt(img, addr) {
   buildFunctions(img);
   const off = addr - img.base, a = img._funcStarts;

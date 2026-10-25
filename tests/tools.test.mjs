@@ -113,3 +113,14 @@ test("export_symbols writes Ghidra and IDA scripts", () => {
     assert.match(src, /nnMain|sub_7100000000/);
   }
 });
+
+test("resolveThunk follows a b-veneer to the real target", async () => {
+  const { resolveThunk } = await import("../plugins/hex-viewer/lib/re.mjs");
+  // image: at off 0, `b +0x40` (target off 0x40); make a fake img
+  const data = new Uint8Array(0x80);
+  const dv = new DataView(data.buffer);
+  dv.setUint32(0, (0x14000000 | (0x40 / 4)) >>> 0, true); // b 0x40
+  const img = { data, base: 0x7100000000 };
+  assert.equal(resolveThunk(img, 0x7100000000), 0x7100000040);
+  assert.equal(resolveThunk(img, 0x7100000040), 0x7100000040); // not a thunk -> unchanged
+});

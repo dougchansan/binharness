@@ -6,7 +6,7 @@ import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { RE_TOOLS, listFunctions, callGraphTool, scanSyscallsTool, scanSyscalls, functionAt, SVC_NAMES, findServices, findServicesTool, parseNpdm, npdmTool, scanRtti, findRttiTool, getRelocations, collectSymbols, emitGhidra, emitIda } from "./re.mjs";
+import { RE_TOOLS, listFunctions, callGraphTool, scanSyscallsTool, scanSyscalls, functionAt, SVC_NAMES, findServices, findServicesTool, parseNpdm, npdmTool, scanRtti, findRttiTool, getRelocations, collectSymbols, emitGhidra, emitIda, resolveThunk } from "./re.mjs";
 
 export const MAX_CHUNK = 64 * 1024;
 export const DEFAULT_SWITCH_BASE = 0x7100000000;
@@ -826,7 +826,8 @@ export function callTool(name, args = {}) {
         if (!ann.labels[v.addr]) { ann.labels[v.addr] = `vtable_${base}`; vt++; }
         for (let i = 0; i < v.methods; i++) {
           const fp = relocs.get(v.off + i * 8); if (fp === undefined) continue;
-          const fa = img.base + fp;
+          // Follow call veneers so the name lands on the real implementation, not the thunk.
+          const fa = resolveThunk(img, img.base + fp);
           if (!ann.labels[fa] && !img.addrNames.has(fa)) { ann.labels[fa] = `${base}::vf${i}`; methods++; }
         }
       }

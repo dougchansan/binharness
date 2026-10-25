@@ -64,7 +64,7 @@ function handle(req) {
       return {
         protocolVersion: params.protocolVersion || "2025-06-18",
         capabilities: { tools: { listChanged: false }, resources: { listChanged: false } },
-        serverInfo: { name: "hex-viewer", version: "0.6.2" },
+        serverInfo: { name: "hex-viewer", version: "0.6.3" },
       };
     case "ping": return {};
     case "tools/list": return { tools: TOOLS };
