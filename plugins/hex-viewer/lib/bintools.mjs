@@ -6,7 +6,7 @@ import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { RE_TOOLS, listFunctions, callGraphTool, scanSyscallsTool, scanSyscalls, functionAt, SVC_NAMES, findServices, findServicesTool, parseNpdm, npdmTool, scanRtti, findRttiTool, getRelocations } from "./re.mjs";
+import { RE_TOOLS, listFunctions, callGraphTool, scanSyscallsTool, scanSyscalls, functionAt, SVC_NAMES, findServices, findServicesTool, parseNpdm, npdmTool, scanRtti, findRttiTool, getRelocations, collectSymbols, emitGhidra, emitIda } from "./re.mjs";
 
 export const MAX_CHUNK = 64 * 1024;
 export const DEFAULT_SWITCH_BASE = 0x7100000000;
@@ -564,6 +564,12 @@ TOOLS.push({
   annotations: { readOnlyHint: false },
 });
 TOOLS.push({
+  name: "export_symbols",
+  description: "Export everything recovered (function boundaries + names, RTTI vtables, svc/service labels, saved labels and comments) as Ghidra and/or IDA import scripts, so the names carry into a full disassembler. Pair with extract_image: load the image at the base address, then run the script. format: ghidra | ida | both (default) | json.",
+  inputSchema: { type: "object", properties: { path: { type: "string" }, out: { type: "string", description: "Output path prefix (e.g. ./ngc). Suffixes .ghidra.py/.ida.py/.names.json are added." }, format: { type: "string", enum: ["ghidra", "ida", "both", "json"], default: "both" }, base: { type: "string" } }, required: ["path", "out"] },
+  annotations: { readOnlyHint: false },
+});
+TOOLS.push({
   name: "label_rtti",
   description: "Name every recovered vtable (vtable_<Class>) and its virtual-method functions (<Class>::vf<n>) from C++ RTTI, as persistent annotations. One of the biggest name-recovery passes for a stripped C++ module; run after find_rtti looks right.",
   inputSchema: { type: "object", properties: { path: { type: "string" }, base: { type: "string" }, dry_run: { type: "boolean" } }, required: ["path"] },
@@ -791,6 +797,16 @@ export function callTool(name, args = {}) {
   }
   if (name === "find_services") return findServicesTool(img, args);
   if (name === "find_rtti") return findRttiTool(img, args);
+  if (name === "export_symbols") {
+    const sym = collectSymbols(img, loadAnnotations(img));
+    const meta = { name: path.basename(path.dirname(file)) === "." ? path.basename(file) : path.basename(file), base: img.base, buildId: img.buildId };
+    const out = resolvePath(args.out), fmt = args.format || "both", written = [];
+    const write = (suffix, content) => { const f = out + suffix; if (fs.existsSync(f)) throw new Error(`${f} already exists`); fs.writeFileSync(f, content); written.push(f); };
+    if (fmt === "ghidra" || fmt === "both") write(".ghidra.py", emitGhidra(sym, meta));
+    if (fmt === "ida" || fmt === "both") write(".ida.py", emitIda(sym, meta));
+    if (fmt === "json") write(".names.json", JSON.stringify(sym, null, 1));
+    return { content: [{ type: "text", text: `exported ${sym.functions.length} functions, ${sym.labels.length} labels, ${sym.comments.length} comments to:\n${written.join("\n")}` }], structuredContent: { functions: sym.functions.length, labels: sym.labels.length, comments: sym.comments.length, files: written } };
+  }
   if (name === "label_rtti") {
     const ann = loadAnnotations(img);
     const classes = scanRtti(img), relocs = getRelocations(img);

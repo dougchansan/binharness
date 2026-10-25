@@ -23,6 +23,7 @@ A binary-analysis toolkit for Nintendo Switch executables and any other file, pa
 | `parse_npdm` | Parse `main.npdm`: program id, and the authoritative Service Access Control (which services a module **hosts** vs **connects to**) + kernel syscall allowlist |
 | `find_rtti` | Recover C++ class names from Itanium RTTI — demangled `type_info` names, each class's vtable and virtual-method count |
 | `label_rtti` | Name every vtable (`vtable_<Class>`) and virtual method (`<Class>::vf<n>`) from RTTI, as persistent annotations — a large name-recovery pass |
+| `export_symbols` | Export all recovered names (functions, RTTI vtables, syscall/service labels, comments) as **Ghidra** and **IDA** import scripts; pair with `extract_image` to carry the whole analysis into a disassembler |
 | `find_xrefs` | Calls, branches and data refs to an address, with the enclosing function |
 | `find_string_refs` | Strings matching text → the code that uses them (fastest way into unknown code) |
 | `list_symbols` | Demangled dynsym symbols and your saved labels |
@@ -33,6 +34,8 @@ A binary-analysis toolkit for Nintendo Switch executables and any other file, pa
 | `compare_files` | Byte-level diff of two files |
 | `annotate` / `get_annotations` | Labels, comments and notes, saved per build id in `~/.binharness/` and shown in later disassembly |
 | `extract_image` | Write the decompressed NSO/NRO image + JSON symbol map for Ghidra/IDA |
+
+**Hand-off to Ghidra/IDA.** `extract_image main out.bin` writes the decompressed image; `export_symbols main --out out` writes `out.ghidra.py` / `out.ida.py`. Load `out.bin` as a flat AArch64 binary at base `0x7100000000`, run the script, and every recovered function, vtable, syscall wrapper and service label is applied.
 
 Stripped Switch sysmodules (no symbol table, statically-linked SDK) are the main target: `list_functions` reconstructs the function layout, `scan_syscalls` shows the kernel interface, and `find_string_refs` gets you from an error message to the code. `extract_image` hands the rest off to Ghidra/IDA.
 
