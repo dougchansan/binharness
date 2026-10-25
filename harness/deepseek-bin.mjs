@@ -9,7 +9,29 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import readline from "node:readline";
+import { fileURLToPath } from "node:url";
 import { TOOLS, safeCallTool, resolvePath } from "../plugins/hex-viewer/lib/bintools.mjs";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+// Load .env (KEY=value lines) from a few likely spots, without overriding the
+// real environment. Looks in cwd, the harness dir, and the repo root.
+function loadDotEnv() {
+  const seen = new Set();
+  for (const dir of [process.cwd(), HERE, path.dirname(HERE)]) {
+    const f = path.join(dir, ".env");
+    if (seen.has(f) || !fs.existsSync(f)) continue;
+    seen.add(f);
+    for (const line of fs.readFileSync(f, "utf8").split("\n")) {
+      const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+      if (!m) continue;
+      let v = m[2].trim();
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+      if (process.env[m[1]] === undefined) process.env[m[1]] = v;
+    }
+  }
+}
+loadDotEnv();
 
 const STATE_DIR = path.join(os.homedir(), ".binharness");
 const TOOL_RESULT_LIMIT = 16000;
@@ -33,7 +55,7 @@ function usage() {
       --recon            run the naming passes (RTTI/syscalls/services) up front
   -h, --help
 
-env: DEEPSEEK_API_KEY (required), DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
+env: DEEPSEEK_API_KEY (required; also read from a .env file in the cwd or repo), DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
 REPL: /help /recon [file] /model /effort /files /add <file> /cost /save <file.md> /reset /exit`);
 }
 
