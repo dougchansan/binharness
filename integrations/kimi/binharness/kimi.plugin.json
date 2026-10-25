@@ -1,0 +1,38 @@
+{
+  "$schema": "https://catalog.msh.team/misc/kimi.plugin.schema.json",
+  "name": "binharness",
+  "version": "0.6.6",
+  "description": "Reverse engineer stripped Nintendo Switch modules (NSO/NRO/NSP) and any binary: hex viewer, AArch64 disassembly, function/RTTI/syscall/service recovery, NPDM parsing, and Ghidra/IDA export.",
+  "keywords": ["binary", "reverse-engineering", "nintendo-switch", "nso", "aarch64", "disassembler", "hex", "rtti", "ghidra"],
+  "author": "dougchansan",
+  "homepage": "https://github.com/dougchansan/binharness",
+  "license": "MIT",
+  "skills": "./skills/",
+  "systemPrompt": "You have the binharness tools (mcp__binharness__*) for reverse engineering Nintendo Switch modules (NSO/NRO; AArch64, base 0x7100000000) and any binary. These sysmodules are stripped and statically linked, so recover names first. On a fresh module run, in order: file_info, parse_npdm (identity + which services it hosts/uses + syscall allowlist), label_rtti (names C++ classes, vtables and virtual methods), then label_syscalls, label_services and label_from_strings. After that list_functions/find_rtti/scan_syscalls/find_services come back named; use find_string_refs to reach specific logic, disassemble (by address or symbol) plus call_graph and find_xrefs to follow it. view_binary opens the hex viewer. extract_image + export_symbols hand off to Ghidra/IDA. Prefer small targeted calls; cite virtual addresses as hex strings. NCA files are encrypted and cannot be decrypted — ask for extracted NSO/NRO.",
+  "skillInstructions": "When the user wants to inspect, disassemble or reverse engineer a binary (especially a Switch NSO/NRO), load the binharness skill and follow its recon-first workflow.",
+  "mcpServers": {
+    "binharness": {
+      "command": "/opt/homebrew/bin/node",
+      "args": ["/Users/douglaswhittingham/codex-hex-viewer/plugins/hex-viewer/server.mjs"]
+    }
+  },
+  "interface": {
+    "displayName": "Binharness",
+    "shortDescription": "Reverse engineer Switch modules and binaries",
+    "longDescription": "A reverse-engineering toolkit for stripped Nintendo Switch modules (NSO/NRO/NSP/XCI) and any binary. Opens an interactive hex viewer, disassembles AArch64, recovers function boundaries, C++ class names (RTTI), syscall wrappers and IPC services, parses NPDM metadata, and exports every recovered name as Ghidra and IDA import scripts.",
+    "developerName": "dougchansan",
+    "websiteURL": "https://github.com/dougchansan/binharness",
+    "category": "DEVELOPER",
+    "tryPrompts": [
+      "Open this .bin in the hex viewer",
+      "What does this Switch NSO module do? Recover its functions and services.",
+      "Disassemble the entry point and reconstruct it in C"
+    ],
+    "mcpOverrides": {
+      "binharness": {
+        "displayName": "Binharness",
+        "description": "Hex viewer, NSO/NRO/NSP parsing, AArch64 disassembly, function/RTTI/syscall/service recovery, and Ghidra/IDA export. Runs locally via Node; reads files only."
+      }
+    }
+  }
+}
