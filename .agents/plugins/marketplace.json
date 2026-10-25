@@ -1,0 +1,11 @@
+{
+  "name": "dougchansan",
+  "plugins": [
+    {
+      "name": "hex-viewer",
+      "source": { "source": "local", "path": "./plugins/hex-viewer" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_USE" },
+      "category": "Developer Tools"
+    }
+  ]
+}

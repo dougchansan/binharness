@@ -1,0 +1,255 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hex Viewer</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #6e7781; --line: #d8dee4; --panel: #f6f8fa;
+    --sel: #5b6cff; --sel-bg: rgba(91,108,255,.18); --zero: #b0b7bf; --ascii: #0a7d4f; --hi: #c2410c;
+  }
+  :root[data-theme="dark"] {
+    --bg: #17181b; --fg: #e6e8eb; --muted: #8b949e; --line: #30363d; --panel: #1f2125;
+    --sel: #8b97ff; --sel-bg: rgba(139,151,255,.22); --zero: #4b525a; --ascii: #5fd39a; --hi: #fb923c;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  header { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40ch; }
+  header .meta { color: var(--muted); }
+  header .spacer { flex: 1; }
+  input { font: inherit; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; width: 12ch; }
+  button { font: inherit; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; cursor: pointer; }
+  button:hover { border-color: var(--sel); }
+  .main { display: flex; height: 440px; }
+  #view { position: relative; flex: 1; overflow-y: auto; overflow-x: auto; outline: none; }
+  #spacer { width: 1px; }
+  #rows { position: absolute; left: 0; top: 0; white-space: pre; padding: 0 12px; }
+  .row { height: 18px; line-height: 18px; display: flex; gap: 14px; }
+  .off { color: var(--muted); user-select: none; }
+  .hex span, .asc span { cursor: pointer; border-radius: 2px; }
+  .hex span { padding: 0 1px; }
+  .hex span.z { color: var(--zero); }
+  .hex span.gap { margin-left: 8px; }
+  .asc { color: var(--ascii); }
+  .asc span.np { color: var(--zero); }
+  span.sel { background: var(--sel-bg); outline: 1px solid var(--sel); }
+  span.hl { color: var(--hi); font-weight: 600; }
+  aside { width: 230px; border-left: 1px solid var(--line); padding: 10px 12px; overflow: auto; background: var(--panel); }
+  aside h4 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  aside table { border-collapse: collapse; width: 100%; }
+  aside td { padding: 1px 0; vertical-align: top; }
+  aside td:first-child { color: var(--muted); padding-right: 8px; white-space: nowrap; }
+  aside .le { margin-top: 10px; }
+  #status { padding: 4px 12px; border-top: 1px solid var(--line); color: var(--muted); min-height: 22px; }
+  @media (max-width: 640px) { aside { display: none; } }
+</style>
+</head>
+<body>
+<header>
+  <span class="name" id="name">Waiting for file…</span>
+  <span class="meta mono" id="meta"></span>
+  <span class="spacer"></span>
+  <label>Go to <input id="goto" class="mono" placeholder="0x0" spellcheck="false"></label>
+  <label>Find <input id="find" class="mono" placeholder="hex or &quot;text&quot;" spellcheck="false"></label>
+  <button id="findNext">Next</button>
+</header>
+<div class="main">
+  <div id="view" tabindex="0"><div id="spacer"></div><div id="rows" class="mono"></div></div>
+  <aside id="inspector"><h4>Inspector</h4><div class="mono" id="insp">Click a byte.</div></aside>
+</div>
+<div id="status" class="mono"></div>
+<script>
+(() => {
+  const ROW_H = 18, BPR = 16, CHUNK = 16 * 1024, MAX_PX = 8_000_000;
+  const $ = (id) => document.getElementById(id);
+  const view = $("view"), rowsEl = $("rows"), spacer = $("spacer");
+  let file = null;            // {path, name, size, format}
+  const chunks = new Map();   // chunk index -> Uint8Array
+  const pending = new Map();  // chunk index -> Promise
+  let sel = -1, findHits = new Set(), scale = 1;
+
+  // ---- MCP Apps host bridge (JSON-RPC over postMessage) ----
+  let nextId = 1; const waiters = new Map();
+  function rpc(method, params) {
+    const id = nextId++;
+    window.parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+    return new Promise((res, rej) => waiters.set(id, { res, rej }));
+  }
+  function notify(method, params) { window.parent.postMessage({ jsonrpc: "2.0", method, params }, "*"); }
+  window.addEventListener("message", (ev) => {
+    const m = ev.data;
+    if (!m || m.jsonrpc !== "2.0") return;
+    if (m.id !== undefined && waiters.has(m.id) && !m.method) {
+      const w = waiters.get(m.id); waiters.delete(m.id);
+      m.error ? w.rej(new Error(m.error.message)) : w.res(m.result);
+      return;
+    }
+    if (m.method === "ui/notifications/tool-result") onToolResult(m.params);
+    else if (m.method === "ui/notifications/host-context-changed") applyContext(m.params);
+    else if (m.method === "ui/resource-teardown" && m.id !== undefined) window.parent.postMessage({ jsonrpc: "2.0", id: m.id, result: {} }, "*");
+  });
+  function applyContext(ctx) {
+    const t = ctx && (ctx.theme || (ctx.hostContext && ctx.hostContext.theme));
+    if (t) document.documentElement.dataset.theme = t;
+  }
+  if (matchMedia("(prefers-color-scheme: dark)").matches) document.documentElement.dataset.theme = "dark";
+
+  rpc("ui/initialize", { protocolVersion: "2026-01-26", appInfo: { name: "hex-viewer", version: "0.1.0" }, appCapabilities: {} })
+    .then((r) => { applyContext(r && r.hostContext); notify("ui/notifications/initialized", {}); reportSize(); })
+    .catch(() => {});
+  function reportSize() { notify("ui/notifications/size-changed", { width: document.body.scrollWidth, height: document.body.scrollHeight }); }
+  new ResizeObserver(reportSize).observe(document.body);
+
+  // ---- data ----
+  const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  function onToolResult(res) {
+    const sc = res && res.structuredContent;
+    if (!sc || !sc.path || sc.data === undefined || sc.chunkOffset === undefined) return;
+    file = sc; chunks.clear(); pending.clear(); findHits.clear();
+    chunks.set(Math.floor(sc.chunkOffset / CHUNK), b64(sc.data));
+    $("name").textContent = sc.name; $("name").title = sc.path;
+    $("meta").textContent = `${sc.size.toLocaleString()} B · 0x${sc.size.toString(16)}${sc.format ? " · " + sc.format : ""}`;
+    const totalPx = Math.ceil(sc.size / BPR) * ROW_H;
+    scale = totalPx > MAX_PX ? totalPx / MAX_PX : 1;
+    spacer.style.height = Math.min(totalPx, MAX_PX) + ROW_H + "px";
+    goTo(sc.initialOffset || 0);
+  }
+  function loadChunk(ci) {
+    if (chunks.has(ci) || pending.has(ci)) return;
+    const p = rpc("tools/call", { name: "read_binary_chunk", arguments: { path: file.path, offset: ci * CHUNK, length: CHUNK, format: "base64" } })
+      .then((r) => { chunks.set(ci, b64(r.structuredContent.data)); pending.delete(ci); render(); })
+      .catch((e) => { pending.delete(ci); status("Read failed: " + e.message); });
+    pending.set(ci, p);
+  }
+  function byteAt(off) {
+    const c = chunks.get(Math.floor(off / CHUNK));
+    return c ? c[off % CHUNK] : undefined;
+  }
+
+  // ---- rendering ----
+  const hx = (n, w) => n.toString(16).padStart(w, "0");
+  function firstRow() { return Math.floor(view.scrollTop * scale / ROW_H); }
+  function render() {
+    if (!file) return;
+    const totalRows = Math.ceil(file.size / BPR);
+    const first = Math.min(firstRow(), Math.max(0, totalRows - 1));
+    const count = Math.ceil(view.clientHeight / ROW_H) + 2;
+    const offW = Math.max(8, hx(file.size, 1).length);
+    let html = "";
+    for (let r = first; r < Math.min(totalRows, first + count); r++) {
+      const base = r * BPR;
+      let hex = "", asc = "";
+      for (let i = 0; i < BPR; i++) {
+        const o = base + i;
+        if (o >= file.size) { hex += `<span class="${i === 8 ? "gap" : ""}">  </span> `; continue; }
+        const b = byteAt(o);
+        if (b === undefined) loadChunk(Math.floor(o / CHUNK));
+        const cls = [i === 8 ? "gap" : "", b === 0 ? "z" : "", o === sel ? "sel" : "", findHits.has(o) ? "hl" : ""].join(" ");
+        hex += `<span data-o="${o}" class="${cls}">${b === undefined ? "··" : hx(b, 2)}</span> `;
+        const ch = b === undefined ? "·" : b >= 0x20 && b < 0x7f ? String.fromCharCode(b).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])) : ".";
+        const acls = [(b === undefined || b < 0x20 || b >= 0x7f) ? "np" : "", o === sel ? "sel" : "", findHits.has(o) ? "hl" : ""].join(" ");
+        asc += `<span data-o="${o}" class="${acls}">${ch}</span>`;
+      }
+      html += `<div class="row"><span class="off">${hx(base, offW)}</span><span class="hex">${hex}</span><span class="asc">${asc}</span></div>`;
+    }
+    rowsEl.innerHTML = html;
+    rowsEl.style.top = view.scrollTop + "px";
+  }
+  view.addEventListener("scroll", () => requestAnimationFrame(render));
+  new ResizeObserver(() => render()).observe(view);
+
+  function goTo(off) {
+    if (!file) return;
+    off = Math.max(0, Math.min(off, file.size - 1));
+    const row = Math.floor(off / BPR);
+    const visible = Math.floor(view.clientHeight / ROW_H);
+    const first = firstRow();
+    if (row < first || row >= first + visible - 1) view.scrollTop = Math.max(0, (row - 2) * ROW_H / scale);
+    select(off);
+  }
+  function select(off) { sel = off; render(); inspect(); status(`offset 0x${hx(off, 1)} (${off})`); }
+  function status(t) { $("status").textContent = t; }
+
+  // ---- inspector ----
+  function inspect() {
+    const n = 8, bytes = [];
+    for (let i = 0; i < n; i++) { const b = byteAt(sel + i); if (b === undefined) break; bytes.push(b); }
+    if (!bytes.length) { $("insp").textContent = "—"; return; }
+    const dv = new DataView(new Uint8Array(bytes).buffer);
+    const row = (k, v) => `<tr><td>${k}</td><td>${v}</td></tr>`;
+    const get = (fn, len, le) => (bytes.length >= len ? dv[fn](0, le) : "—");
+    const f = (v) => (typeof v === "number" && !Number.isInteger(v) ? v.toPrecision(7) : v);
+    const tbl = (le) =>
+      row("u16", get("getUint16", 2, le)) + row("s16", get("getInt16", 2, le)) +
+      row("u32", get("getUint32", 4, le)) + row("s32", get("getInt32", 4, le)) +
+      row("hex32", bytes.length >= 4 ? "0x" + hx(dv.getUint32(0, le), 8) : "—") +
+      row("f32", f(get("getFloat32", 4, le))) + row("f64", f(get("getFloat64", 8, le)));
+    $("insp").innerHTML =
+      `<table>${row("offset", "0x" + hx(sel, 1))}${row("u8", bytes[0])}${row("s8", (bytes[0] << 24) >> 24)}${row("bin", bytes[0].toString(2).padStart(8, "0"))}</table>` +
+      `<h4 class="le">Big-endian</h4><table>${tbl(false)}</table>` +
+      `<h4 class="le">Little-endian</h4><table>${tbl(true)}</table>`;
+  }
+
+  // ---- interaction ----
+  rowsEl.addEventListener("click", (e) => { const o = e.target.dataset && e.target.dataset.o; if (o !== undefined) { select(+o); view.focus(); } });
+  view.addEventListener("keydown", (e) => {
+    if (!file || sel < 0) return;
+    const page = Math.floor(view.clientHeight / ROW_H) * BPR;
+    const d = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -BPR, ArrowDown: BPR, PageUp: -page, PageDown: page }[e.key];
+    if (d) { e.preventDefault(); goTo(sel + d); }
+    else if (e.key === "Home") { e.preventDefault(); goTo(0); }
+    else if (e.key === "End") { e.preventDefault(); goTo(file.size - 1); }
+  });
+  $("goto").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    const v = e.target.value.trim();
+    const n = /^(0x)?[0-9a-f]+$/i.test(v) && (/^0x/i.test(v) || /[a-f]/i.test(v)) ? parseInt(v.replace(/^0x/i, ""), 16) : parseInt(v, 10);
+    if (Number.isFinite(n)) goTo(n);
+  });
+
+  // Search runs over chunks fetched on demand, scanning forward from the selection.
+  function parsePattern(v) {
+    v = v.trim();
+    const q = v.match(/^"(.*)"$/);
+    if (q) return Array.from(new TextEncoder().encode(q[1]));
+    const h = v.replace(/\s+/g, "");
+    if (/^([0-9a-f]{2})+$/i.test(h)) return h.match(/../g).map((x) => parseInt(x, 16));
+    return Array.from(new TextEncoder().encode(v));
+  }
+  async function ensure(off) {
+    const ci = Math.floor(off / CHUNK);
+    if (!chunks.has(ci)) { loadChunk(ci); await pending.get(ci); }
+  }
+  let searching = false;
+  async function findNext() {
+    if (!file || searching) return;
+    const pat = parsePattern($("find").value);
+    if (!pat.length) return;
+    searching = true;
+    const start = sel + 1;
+    try {
+      for (let off = start; off <= file.size - pat.length; off++) {
+        if (off % CHUNK === 0 || off === start) {
+          await ensure(off); await ensure(Math.min(file.size - 1, off + CHUNK + pat.length));
+          status(`searching… 0x${hx(off, 1)}`);
+        }
+        let ok = true;
+        for (let j = 0; j < pat.length; j++) if (byteAt(off + j) !== pat[j]) { ok = false; break; }
+        if (ok) {
+          findHits = new Set(pat.map((_, j) => off + j));
+          goTo(off); status(`found at 0x${hx(off, 1)}`);
+          return;
+        }
+      }
+      status("not found (searched to end of file)");
+    } finally { searching = false; }
+  }
+  $("findNext").addEventListener("click", findNext);
+  $("find").addEventListener("keydown", (e) => { if (e.key === "Enter") findNext(); });
+})();
+</script>
+</body>
+</html>

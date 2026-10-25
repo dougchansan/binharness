@@ -1,0 +1,24 @@
+{
+  "name": "hex-viewer",
+  "version": "0.1.0",
+  "description": "View binary files as an interactive hex dump inside Codex.",
+  "author": { "name": "dougchansan", "url": "https://github.com/dougchansan" },
+  "license": "MIT",
+  "homepage": "https://github.com/dougchansan/codex-hex-viewer",
+  "repository": "https://github.com/dougchansan/codex-hex-viewer",
+  "keywords": ["binary", "hex", "hexdump", "viewer", "mcp-app"],
+  "mcpServers": "./.mcp.json",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Hex Viewer",
+    "shortDescription": "Browse binary files as hex",
+    "longDescription": "Opens any binary file as a scrollable hex + ASCII dump with offset jump, byte inspector, format detection (ELF, Mach-O, PE, PNG, ZIP, GameCube DOL/REL/Yaz0/RARC/GCM, ...) and string extraction.",
+    "developerName": "dougchansan",
+    "category": "Developer Tools",
+    "capabilities": ["Interactive", "Read"],
+    "composerIcon": "./assets/icon.svg",
+    "logo": "./assets/icon.svg",
+    "defaultPrompt": ["Show this binary file in the hex viewer"],
+    "brandColor": "#5B6CFF"
+  }
+}
