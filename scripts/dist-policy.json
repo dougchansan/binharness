@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "maxTextBytes": 1048576,
+  "maxArchiveBytes": 16777216,
+  "maxArchiveEntries": 256,
+  "gitFiles": [
+    ".agents/plugins/marketplace.json",
+    ".github/workflows/distribution-audit.yml",
+    ".gitignore",
+    ".npmignore",
+    "LICENSE",
+    "PROVENANCE.md",
+    "README.md",
+    "docs/distribution-audit.md",
+    "docs/screenshot.jpg",
+    "harness/deepseek-bin.mjs",
+    "harness/fw-index.mjs",
+    "package.json",
+    "plugins/hex-viewer/.codex-plugin/plugin.json",
+    "plugins/hex-viewer/.mcp.json",
+    "plugins/hex-viewer/assets/app.html",
+    "plugins/hex-viewer/assets/icon.svg",
+    "plugins/hex-viewer/lib/bintools.mjs",
+    "plugins/hex-viewer/lib/core.mjs",
+    "plugins/hex-viewer/lib/re.mjs",
+    "plugins/hex-viewer/server.mjs",
+    "plugins/hex-viewer/skills/hex-viewer/SKILL.md",
+    "scripts/audit-dist.mjs",
+    "scripts/dist-policy.json",
+    "server.json",
+    "tests/audit-dist.test.mjs",
+    "tests/make-fixture.mjs",
+    "tests/mock-deepseek.mjs",
+    "tests/tools.test.mjs"
+  ],
+  "retiredGitFiles": [],
+  "packageFiles": [
+    "LICENSE",
+    "PROVENANCE.md",
+    "README.md",
+    "docs/distribution-audit.md",
+    "harness/deepseek-bin.mjs",
+    "harness/fw-index.mjs",
+    "package.json",
+    "plugins/hex-viewer/assets/app.html",
+    "plugins/hex-viewer/lib/bintools.mjs",
+    "plugins/hex-viewer/lib/core.mjs",
+    "plugins/hex-viewer/lib/re.mjs",
+    "plugins/hex-viewer/server.mjs",
+    "scripts/audit-dist.mjs",
+    "scripts/dist-policy.json"
+  ],
+  "binaryAssets": {
+    "docs/screenshot.jpg": {
+      "sha256": "daefe83721cb6f05334f1c319dac8a5aa0800cdf77008e84adf978160473ef48",
+      "note": "Git-only inventory exception for the inspected legacy UI screenshot. Its generating input and authorship provenance are unverified; this digest is not copyright clearance. See PROVENANCE.md."
+    }
+  }
+}

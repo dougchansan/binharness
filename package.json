@@ -1,7 +1,7 @@
 {
   "name": "binharness",
   "version": "0.6.6",
-  "description": "Reverse-engineering toolkit for stripped Nintendo Switch modules (and any binary): hex viewer, NSO/NRO/NSP parsing, AArch64 disassembly, function/RTTI/syscall/service recovery, Ghidra/IDA export. Ships a Codex MCP plugin and a DeepSeek CLI agent.",
+  "description": "Binary-analysis tools for supplied files: hex viewing, NSO/NRO parsing, container listings, disassembly, heuristic function/name recovery, and Ghidra/IDA export. Includes an MCP server and model API CLI.",
   "type": "module",
   "license": "MIT",
   "bin": {
@@ -13,10 +13,19 @@
     "plugins/hex-viewer/server.mjs",
     "plugins/hex-viewer/assets/app.html",
     "harness",
+    "scripts/audit-dist.mjs",
+    "scripts/dist-policy.json",
+    "docs/distribution-audit.md",
+    "PROVENANCE.md",
     "README.md",
     "LICENSE"
   ],
-  "scripts": { "test": "node --test tests/tools.test.mjs" },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "audit:dist": "node scripts/audit-dist.mjs",
+    "audit:history": "node scripts/audit-dist.mjs --history",
+    "prepack": "node scripts/audit-dist.mjs --package-only"
+  },
   "engines": { "node": ">=18" },
   "keywords": [
     "reverse-engineering", "nintendo-switch", "nso", "aarch64", "disassembler",

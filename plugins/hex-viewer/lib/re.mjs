@@ -22,7 +22,7 @@ function isServiceName(s) {
 
 const sext = (v, bits) => (v << (32 - bits)) >> (32 - bits);
 
-// Horizon 64-bit SVC table (id -> name). Stable across firmware.
+// Known Horizon 64-bit SVC ids -> names; coverage is limited to this table.
 export const SVC_NAMES = {
   0x01: "SetHeapSize", 0x02: "SetMemoryPermission", 0x03: "SetMemoryAttribute", 0x04: "MapMemory", 0x05: "UnmapMemory",
   0x06: "QueryMemory", 0x07: "ExitProcess", 0x08: "CreateThread", 0x09: "StartThread", 0x0a: "ExitThread",
@@ -234,9 +234,9 @@ export function findServices(img) {
     .sort((a, b) => b.refs.length - a.refs.length || a.name.localeCompare(b.name));
 }
 
-// Parse a main.npdm (program metadata). Returns the program id, the authoritative
-// service access list (which services the module may host vs connect to), and the
-// kernel-capability syscall allowlist. This is ground truth, unlike reference scans.
+// Read main.npdm ACI0 declarations: program id, service host/connect entries,
+// and the kernel-capability syscall allowlist. ACID signatures and effective
+// runtime authorization are not verified; declarations do not establish use.
 export function parseNpdm(buf) {
   if (buf.toString("latin1", 0, 4) !== "META") throw new Error("not an NPDM (no META magic)");
   const flags = buf[0x0c];
@@ -269,10 +269,9 @@ export function parseNpdm(buf) {
   return out;
 }
 
-// Name functions from diagnostic strings: trace/assert messages often embed the
-// C++ qualified name of the function that logs them, e.g. "RoModule::RelocateRel
-// is called". We extract Class::method tokens and, when exactly one unnamed
-// function references that string, name it.
+// Infer labels from diagnostic strings, such as the synthetic message
+// "FixtureWorker::Run is called". A Class::method token referenced by exactly
+// one detected function is a naming candidate, not proof of the function's name.
 function methodLike(qualified) {
   const last = qualified.split("::").pop();
   if (/^k[A-Z]/.test(last)) return false;       // kConstant enum member
@@ -405,8 +404,7 @@ export function emitGhidra(sym, meta) {
   return L.join("\n") + "\n";
 }
 
-// Java GhidraScript — runs in headless Ghidra with no Python/PyGhidra setup
-// (modern Ghidra runs .py only via PyGhidra, which is often not installed).
+// Java GhidraScript avoids a Python integration dependency.
 // `className` must match the file's basename.
 export function emitGhidraJava(sym, meta, className) {
   const j = (s) => '"' + [...s].map((c) => {
@@ -474,7 +472,7 @@ export function listFunctions(img, args) {
   if (re) rows = rows.filter((f) => re.test(label(img, f)));
   const total = rows.length;
   rows = rows.slice(0, args.limit || 200);
-  const text = `${funcs.length} functions recovered (${funcs.filter((f) => f.prologue).length} with clear prologues)` +
+  const text = `${funcs.length} functions recovered (heuristic boundaries; ${funcs.filter((f) => f.prologue).length} with recognized prologues)` +
     (total !== funcs.length ? `; ${total} match` : "") + `\n` +
     rows.map((f) => `${f.addr.toString(16)}  ${hex(f.size).padStart(7)}  ${f.prologue ? " " : "~"} ${label(img, f)}`).join("\n");
   return { content: [{ type: "text", text }], structuredContent: { count: funcs.length, shown: rows.length } };
@@ -514,18 +512,18 @@ export function npdmTool(buf, img) {
   const uses = n.services.filter((s) => !s.host).map((s) => s.name);
   const lines = [
     `${n.name}  ${n.programId}  ${n.is64Bit ? "64-bit" : "32-bit"}  (main-thread prio ${n.mainThreadPriority}, core ${n.mainThreadCore})`,
-    `hosts (${hosts.length}): ${hosts.join(" ") || "—"}`,
-    `connects to (${uses.length}): ${uses.join(" ") || "—"}`,
-    `allowed syscalls (${n.allowedSyscalls.length}): ${n.allowedSyscalls.map((s) => SVC_NAMES[s] || "0x" + s.toString(16)).join(", ")}`,
+    `declared host permissions (${hosts.length}): ${hosts.join(" ") || "—"}`,
+    `declared connect permissions (${uses.length}): ${uses.join(" ") || "—"}`,
+    `declared syscall allowlist (${n.allowedSyscalls.length}): ${n.allowedSyscalls.map((s) => SVC_NAMES[s] || "0x" + s.toString(16)).join(", ")}`,
+    "ACI0 declarations only; ACID signatures and effective authorization are not verified. Permissions do not establish runtime use.",
   ];
-  // If given the matching module image, note how the linked svc wrappers relate to
-  // the allowlist. The wrapper scan counts statically-linked wrappers, not calls
-  // actually made, so wrappers outside the allowlist are typically just unused.
+  // Compare statically detected SVC encodings with the declared allowlist.
+  // A site can be in an unused wrapper; its presence does not prove execution.
   if (img) {
     const present = new Set(scanSyscalls(img).map((s) => s.num));
     const allowed = new Set(n.allowedSyscalls);
     const extra = [...present].filter((s) => !allowed.has(s)).sort((a, b) => a - b);
-    lines.push(`svc wrappers present: ${present.size} distinct; ${extra.length ? extra.length + " outside the allowlist (likely unused linked wrappers): " + extra.map((s) => SVC_NAMES[s] || "0x" + s.toString(16)).join(", ") : "all within the NPDM allowlist"}`);
+    lines.push(`svc numbers detected: ${present.size} distinct; ${extra.length ? extra.length + " outside the declared allowlist (execution not established): " + extra.map((s) => SVC_NAMES[s] || "0x" + s.toString(16)).join(", ") : "all within the declared ACI0 allowlist"}`);
   }
   return { content: [{ type: "text", text: lines.join("\n") }], structuredContent: { programId: n.programId, hosts, uses, allowedSyscalls: n.allowedSyscalls } };
 }
@@ -549,7 +547,7 @@ export function findServicesTool(img, args) {
   const re = args.filter ? new RegExp(args.filter, "i") : null;
   const rows = re ? svcs.filter((s) => re.test(s.name)) : svcs;
   const text = rows.length
-    ? `${svcs.length} IPC services referenced:\n` + rows.map((s) =>
+    ? `${svcs.length} IPC services referenced (candidate strings; runtime use not established):\n` + rows.map((s) =>
         `  ${s.name.padEnd(10)} str@${s.addr.toString(16)}  ${s.refs.length} ref${s.refs.length === 1 ? "" : "s"}` +
         (s.refs.length ? `  e.g. ${s.refs.slice(0, 3).map((r) => r.func || r.from.toString(16)).join(", ")}` : "")).join("\n")
     : "no known IPC service names found in rodata";
@@ -569,15 +567,15 @@ export function scanSyscallsTool(img, args) {
 }
 
 export const RE_TOOLS = [
-  { name: "list_functions", description: "Recover and list function boundaries in a (possibly stripped) module, from call targets, relocated code pointers, init/fini arrays and prologue scanning. Columns: address, size, prologue marker (~ = inferred), name. Essential for navigating stripped Switch sysmodules.",
+  { name: "list_functions", description: "Estimate AArch64 function boundaries from direct call targets, symbols, relocated code pointers, init/fini arrays and prologue patterns. Boundaries and sizes are heuristic, including those with recognized prologues; functions can be missed or split. Columns: address, estimated size, prologue marker (~ = no recognized prologue), name/label.",
     inputSchema: { type: "object", properties: { path: { type: "string" }, filter: { type: "string", description: "Regex on the function name/label." }, named_only: { type: "boolean", description: "Only functions with a symbol or saved label." }, min_size: { type: "integer", description: "Minimum size in bytes." }, limit: { type: "integer", default: 200 }, base: { type: "string" } }, required: ["path"] } },
-  { name: "call_graph", description: "Show the call graph around a function (by address or symbol/label). direction: callees (what it calls), callers (what calls it), or both. Depth-limited tree; ↺ marks recursion.",
+  { name: "call_graph", description: "Show detected direct AArch64 BL edges around an inferred function (by address or symbol/label). direction: callees, callers, or both. Depth-limited tree; ↺ marks a detected cycle. Indirect/tail calls and uncertain function boundaries can leave gaps; this is not a runtime trace.",
     inputSchema: { type: "object", properties: { path: { type: "string" }, address: { type: "string" }, symbol: { type: "string" }, direction: { type: "string", enum: ["callees", "callers", "both"], default: "callees" }, depth: { type: "integer", default: 2 }, base: { type: "string" } }, required: ["path"] } },
-  { name: "scan_syscalls", description: "Find every `svc #n` instruction and decode the Horizon kernel syscall (SendSyncRequest, ConnectToNamedPort, QueryMemory, …), grouped by syscall with example addresses. Reveals what kernel services a module uses.",
+  { name: "scan_syscalls", description: "Scan the text segment for AArch64 `svc #n` encodings, labeling known Horizon syscall numbers and grouping sites by number. Unknown ids remain numeric. Presence can reflect unused linked wrappers and does not establish execution or permission.",
     inputSchema: { type: "object", properties: { path: { type: "string" }, base: { type: "string" } }, required: ["path"] } },
-  { name: "find_services", description: "Find Switch IPC service names in rodata (fsp-srv, set:sys, nifm:u, ldr:ro, …) and the functions that reference each one, sorted by reference count. Shows which system services a module registers or talks to.",
+  { name: "find_services", description: "Find candidate Switch IPC service strings in rodata/data using a known-name filter, and detected AArch64 references to them. Sort by reference count. References do not establish service registration, connection, ownership or runtime use; unknown names can be missed.",
     inputSchema: { type: "object", properties: { path: { type: "string" }, filter: { type: "string", description: "Regex on the service name." }, base: { type: "string" } }, required: ["path"] } },
-  { name: "find_rtti", description: "Recover C++ class names from Itanium RTTI: demangles type_info name strings and locates each class's vtable and its number of virtual methods. The richest source of names in a stripped C++ module (nn::fs::RomFsFileSystem, DisplayPort::Connector, …).",
+  { name: "find_rtti", description: "Find candidate Itanium C++ type_info names, vtables and method-slot counts using strings and relocations; demangle names when c++filt is available. Missing RTTI/relocations and unsupported layouts can reduce coverage. Method-slot counts and inferred table boundaries require review.",
     inputSchema: { type: "object", properties: { path: { type: "string" }, filter: { type: "string", description: "Regex on the demangled class name." }, limit: { type: "integer", default: 200 }, base: { type: "string" } }, required: ["path"] } },
 ];
 for (const t of RE_TOOLS) t.annotations = { readOnlyHint: true };

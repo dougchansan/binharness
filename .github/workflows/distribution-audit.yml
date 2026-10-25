@@ -1,0 +1,41 @@
+name: Distribution audit
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18', '24']
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install disassembly tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes llvm binutils
+          mkdir -p "$RUNNER_TEMP/binharness-tools"
+          ln -s "$(command -v llvm-objdump)" "$RUNNER_TEMP/binharness-tools/objdump"
+          echo "$RUNNER_TEMP/binharness-tools" >> "$GITHUB_PATH"
+      - name: Run synthetic tests and audit regressions
+        run: npm test
+      - name: Audit tracked source and actual npm archive
+        run: npm run audit:dist
+      - name: Audit all fetched Git history
+        run: npm run audit:history
+      - name: Exercise the prepack gate
+        run: npm pack --json --pack-destination "$RUNNER_TEMP"

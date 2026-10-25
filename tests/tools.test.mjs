@@ -11,10 +11,21 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const fixture = path.join(here, "fixture.nso");
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "binharness-test-"));
 process.env.HOME = home; // annotations go to a throwaway ~/.binharness
-const { callTool } = await import("../plugins/hex-viewer/lib/bintools.mjs");
+const { callTool, TOOLS } = await import("../plugins/hex-viewer/lib/bintools.mjs");
 const run = (name, args) => callTool(name, { path: fixture, ...args }).content[0].text;
 
 before(() => execFileSync(process.execPath, [path.join(here, "make-fixture.mjs")]));
+
+test("tool annotations distinguish persistent writes from reads", () => {
+  const writes = new Set([
+    "annotate", "extract_image", "export_symbols", "label_syscalls",
+    "label_rtti", "label_services", "label_from_strings",
+  ]);
+  for (const tool of TOOLS) {
+    assert.equal(tool.annotations?.readOnlyHint, !writes.has(tool.name), tool.name);
+  }
+  assert.equal(TOOLS.filter((tool) => writes.has(tool.name)).length, writes.size);
+});
 
 test("file_info parses NSO header and segments", () => {
   const t = run("file_info");

@@ -35,7 +35,8 @@ loadDotEnv();
 
 const STATE_DIR = path.join(os.homedir(), ".binharness");
 const TOOL_RESULT_LIMIT = 16000;
-// USD per 1M tokens at peak rates (off-peak is half): [cache hit, cache miss, output]
+// Hardcoded USD/1M-token assumptions: [cache hit, cache miss, output].
+// These are not verified current provider prices or a spending upper bound.
 const PRICES = { "deepseek-flash": [0.006, 0.3, 1.2], "deepseek-v4-pro": [0.044, 1.32, 3.96] };
 const WRITE_TOOLS = new Set(["extract_image"]);
 
@@ -45,17 +46,19 @@ function usage() {
   console.log(`usage: deepseek-bin [options] [files...]
 
   -p, --prompt <text>    run one task non-interactively and exit
-  -m, --model <name>     deepseek-flash (default) | deepseek-v4-pro
+  -m, --model <name>     model id for the endpoint (default deepseek-flash)
       --pro              shorthand for --model deepseek-v4-pro
   -e, --effort <level>   none | low | high (default) | max   (none = no thinking)
       --max-steps <n>    tool-call rounds per task (default 60)
       --base-url <url>   API base (default https://api.deepseek.com)
-  -y, --yes              allow file-writing tools without asking
+  -y, --yes              allow extract_image without its confirmation prompt
       --show-thinking    print the model's reasoning as it streams
-      --recon            run the naming passes (RTTI/syscalls/services) up front
+      --recon            run local recon (RTTI/syscalls/services/strings) on NSO/ELF inputs
   -h, --help
 
 env: DEEPSEEK_API_KEY (required; also read from a .env file in the cwd or repo), DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
+Model requests include selected tool outputs; /cost uses hardcoded rate assumptions.
+Only extract_image is confirmation-gated; annotation/export tools can also write.
 REPL: /help /recon [file] /model /effort /files /add <file> /cost /save <file.md> /reset /exit`);
 }
 
@@ -89,14 +92,14 @@ const out = (s) => process.stdout.write(s);
 // ---------- conversation state ----------
 
 const SYSTEM = `You are deepseek-bin, an expert reverse engineer working inside a binary-analysis harness.
-Primary target: Nintendo Switch executables (NSO/NRO; AArch64, little-endian, default base 0x7100000000) and containers (NSP/PFS0, XCI/HFS0). These sysmodules are STRIPPED and statically linked (no symbol table), so you recover structure yourself. You can also analyze any other file.
+Primary target: Nintendo Switch executables (NSO/NRO; AArch64, little-endian, default base 0x7100000000) and container listings (NSP/PFS0, XCI/HFS0). Modules may have few symbols, so infer structure from available evidence. Other formats receive raw-byte inspection; recognition does not provide an ELF/Mach-O/PE loader. x86-64 instruction disassembly does not enable the AArch64-only reference/function heuristics.
 
-RECON FIRST — on a fresh module, before answering anything, establish structure and names in this order (unless the harness already ran /recon, in which case names exist and you can skip straight to the question):
+RECON FIRST — inspect a fresh NSO/NRO in this order. If the harness already ran /recon, use its successful summaries and note any missing evidence:
 1. file_info — segments, build id, size.
-2. parse_npdm — if a sibling main.npdm exists: program id, which services the module HOSTS vs connects to, syscall allowlist. This is the module's identity and job in one call.
-3. label_rtti — demangle C++ class names and name every vtable + virtual method. This is the biggest win; do it early so disassembly and the function list come back named.
-4. label_syscalls and label_services — name the svc wrappers and service-using functions.
-5. Now list_functions / find_rtti / scan_syscalls / find_services show real names. Use find_string_refs (log/assert/error strings) to reach specific logic.
+2. parse_npdm — if a sibling main.npdm exists: read ACI0 program/service/kernel declarations. ACID signatures and effective authorization are not verified; declared permissions do not establish runtime use.
+3. label_rtti — save candidate vtable and method-slot labels from recognized RTTI. Slot labels are not original method names and coverage depends on metadata/relocations.
+4. label_syscalls, label_services and label_from_strings — save candidate wrapper, service-reference and diagnostic-name labels. Review their supporting evidence.
+5. Use list_functions / find_rtti / scan_syscalls / find_services with their heuristic limits. Distinguish parsed symbols from inferred labels; direct-call graphs and static references can be incomplete. Use find_string_refs to investigate specific strings.
 
 Then investigate:
 - disassemble by address or symbol; it annotates call targets, labels, ADRP+ADD/LDR data refs with string previews. Follow callers/callees with call_graph and find_xrefs.
@@ -106,7 +109,8 @@ Then investigate:
 Rules:
 - Prefer many small, targeted calls over huge dumps. Ask for 32-200 instructions at a time.
 - Addresses are virtual-address hex strings ("0x7100012340"). Cite addresses in answers.
-- Reconstruct code as clear C/C++ with typed structs; flag uncertain parts.
+- If reconstructing C/C++, label it as an input-derived hypothesis, cite evidence and flag uncertain parts. Model output does not establish independent provenance or redistribution rights.
+- An SVC encoding or service-string reference does not prove that a call executes or that a module provides the service.
 - NCA files are encrypted; you cannot decrypt them. Ask for extracted NSO/NRO instead.
 Be concise in prose; be precise about addresses, types and evidence.`;
 
@@ -239,8 +243,8 @@ async function runTask(userText) {
   return final.content;
 }
 
-// Deterministic recon: run the structure + naming passes on a module directly
-// (no model tokens), then inject a summary so the agent starts already oriented.
+// Run local structure/naming passes without making a model request. Their
+// summaries enter the next request and contribute to that request's input tokens.
 function recon(file) {
   file = resolvePath(file);
   out(bold(`\nrecon ${path.basename(file)}\n`));
@@ -262,15 +266,15 @@ function recon(file) {
   step("label_from_strings", "label_from_strings", {});
   step("list_functions", "list_functions", { named_only: true, limit: 40 });
   messages.push(
-    { role: "user", content: `I ran recon on ${file}. Structure and names are already established (RTTI classes, svc wrappers and service users are labeled and persist). Here is the summary; use it instead of re-running these passes:\n\n${summary.join("\n\n")}` },
-    { role: "assistant", content: "Recon received — the module is oriented and named. What would you like me to investigate?" },
+    { role: "user", content: `I ran local recon on ${file}. The successful-pass summaries below may include inferred RTTI, syscall, service-reference and diagnostic-name labels. Use the available evidence, distinguish declarations from runtime activity, and note gaps:\n\n${summary.join("\n\n")}` },
+    { role: "assistant", content: "Recon summaries received. I will treat inferred labels as hypotheses. What would you like me to investigate?" },
   );
-  out(dim(`  (${summary.length} passes; names saved and shared with the model)\n`));
+  out(dim(`  (${summary.length} successful passes; summaries queued for the next model request)\n`));
 }
 
 function costLine() {
   const total = totals.hit + totals.miss;
-  return dim(`[${opts.model} · in ${total.toLocaleString()} (${total ? Math.round((100 * totals.hit) / total) : 0}% cached) · out ${totals.out.toLocaleString()} · ≤$${totals.cost.toFixed(4)}]`);
+  return dim(`[${opts.model} · in ${total.toLocaleString()} (${total ? Math.round((100 * totals.hit) / total) : 0}% cached) · out ${totals.out.toLocaleString()} · est. $${totals.cost.toFixed(4)} (built-in rates)]`);
 }
 
 function toMarkdown() {
@@ -302,7 +306,7 @@ function looksLikeModule(f) {
 async function main() {
   const intro = opts.files.length ? `I'm working with these files:${filesNote(opts.files).replace(/^\n\nFiles in this session:/, "")}\nStart by getting your bearings (file_info), then wait for my questions.` : null;
 
-  // --recon (or auto, when a single module is given): run the naming passes up front.
+  // Explicit --recon only; the current signature filter selects NSO and ELF.
   const reconTargets = opts.recon ? opts.files.filter(looksLikeModule) : [];
   if (opts.recon && !reconTargets.length) out(yellow("(--recon: no NSO/ELF module among the files)\n"));
 
