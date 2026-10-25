@@ -30,7 +30,7 @@ test("disassembly annotates calls and string refs", () => {
 });
 test("find_xrefs finds the BL", () => assert.match(run("find_xrefs", { address: "0x7100000020" }), /710000000c\s+call\s+nnMain\+0xc/));
 test("find_string_refs links string to code", () => assert.match(run("find_string_refs", { text: "switch error" }), /<- 7100000008\s+nnMain\+0x8/));
-test("search_bytes with wildcards", () => assert.match(run("search_bytes", { pattern: "c0 03 ?? d6", segment: "text" }), /0x7100000010\n0x7100000020/));
+test("search_bytes with wildcards", () => assert.match(run("search_bytes", { pattern: "c0 03 ?? d6", segment: "text" }), /0x7100000010\n0x7100000024/));
 test("decode_struct", () => assert.match(run("decode_struct", { address: "0x7100001000", layout: "u32 zero; u32 len" }), /len: 24 \(0x18\)/));
 test("annotations persist and show in disassembly", () => {
   run("annotate", { address: "0x7100000010", label: "main_epilogue", comment: "returns" });
@@ -49,4 +49,17 @@ test("harness runs a full tool loop against a mock API", async () => {
   await new Promise((r) => mock.once("exit", r));
   assert.match(outp, /used by nnMain/);
   assert.match(stderr, /MOCK OK \(3 requests\)/);
+});
+
+test("list_functions recovers nnMain and SleepThread", () => {
+  const t = run("list_functions");
+  assert.match(t, /functions recovered/);
+  assert.match(t, /7100000000/); // nnMain
+  assert.match(t, /7100000020/); // SleepThread (BL target + symbol)
+});
+test("call_graph shows nnMain -> SleepThread", () => {
+  assert.match(run("call_graph", { symbol: "nnMain", direction: "callees" }), /SleepThread|7100000020/);
+});
+test("scan_syscalls decodes svc", () => {
+  assert.match(run("scan_syscalls"), /svc 0x0b\s+SleepThread\s+1×/);
 });

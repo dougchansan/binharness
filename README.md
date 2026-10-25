@@ -14,6 +14,9 @@ A binary-analysis toolkit for Nintendo Switch executables and any other file, pa
 | `view_binary` | Interactive hex + ASCII viewer (Codex UI): go to offset, hex/text search, byte inspector |
 | `file_info` | Identify the file and its structure. NSO/NRO: segments, build id, module path, symbols. NSP/XCI: contained files |
 | `disassemble` | AArch64 (or x86-64) disassembly by address or symbol, annotated with call targets, labels and resolved `ADRP`+`ADD`/`LDR` data refs with string previews |
+| `list_functions` | Recover function boundaries in stripped code (call targets + relocations + init arrays + prologue scan) — the missing symbol table |
+| `call_graph` | Callees/callers of a function as a depth-limited tree (recursion marked) |
+| `scan_syscalls` | Decode every `svc #n` into its Horizon kernel call (`SendSyncRequest`, `QueryMemory`, …), grouped |
 | `find_xrefs` | Calls, branches and data refs to an address, with the enclosing function |
 | `find_string_refs` | Strings matching text → the code that uses them (fastest way into unknown code) |
 | `list_symbols` | Demangled dynsym symbols and your saved labels |
@@ -24,6 +27,8 @@ A binary-analysis toolkit for Nintendo Switch executables and any other file, pa
 | `compare_files` | Byte-level diff of two files |
 | `annotate` / `get_annotations` | Labels, comments and notes, saved per build id in `~/.binharness/` and shown in later disassembly |
 | `extract_image` | Write the decompressed NSO/NRO image + JSON symbol map for Ghidra/IDA |
+
+Stripped Switch sysmodules (no symbol table, statically-linked SDK) are the main target: `list_functions` reconstructs the function layout, `scan_syscalls` shows the kernel interface, and `find_string_refs` gets you from an error message to the code. `extract_image` hands the rest off to Ghidra/IDA.
 
 **Formats.** Switch: NSO (LZ4 segments), NRO, NSP/PFS0, XCI/HFS0, NPDM, SARC, BNTX, BFRES, BFSTM, MSBT, BYML, AAMP. Also ELF, Mach-O, PE, PNG/JPEG/GIF, ZIP/gzip/7z/zstd, SQLite, wasm, GameCube/Wii (DOL, REL, Yaz0, RARC, disc images). NSO/NRO addresses use base `0x7100000000` by default (override with `base`).
 

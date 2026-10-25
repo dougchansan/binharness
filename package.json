@@ -1,6 +1,6 @@
 {
   "name": "codex-hex-viewer",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Hex viewer + Switch binary RE toolkit for Codex (MCP) and a DeepSeek CLI agent",
   "type": "module",
   "license": "MIT",

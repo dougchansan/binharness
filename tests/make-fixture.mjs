@@ -38,7 +38,8 @@ put(0x04, 0x90000000 | (1 << 29) | 0);                        // adrp x0, 0x1000
 put(0x08, 0x91000000 | (0x100 << 10) | (0 << 5) | 0);         // add  x0, x0, #0x100  -> "Hello..."
 put(0x0c, 0x94000000 | (0x14 / 4));                           // bl   0x20
 put(0x10, 0xd65f03c0);                                        // ret
-put(0x20, 0xd65f03c0);                                        // SleepThread: ret
+put(0x20, (0xd4000001 | (0x0b << 5)) >>> 0);                   // SleepThread: svc #0xb
+put(0x24, 0xd65f03c0);                                        // ret
 
 const ro = Buffer.alloc(RO);
 const modPath = "D:\\home\\fixture\\main.nss";

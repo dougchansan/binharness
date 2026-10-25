@@ -6,6 +6,7 @@ import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { RE_TOOLS, listFunctions, callGraphTool, scanSyscallsTool } from "./re.mjs";
 
 export const MAX_CHUNK = 64 * 1024;
 export const DEFAULT_SWITCH_BASE = 0x7100000000;
@@ -555,6 +556,7 @@ export const TOOLS = [
   { name: "extract_image", description: "Write the decompressed NSO/NRO memory image to `out` as a flat binary (load it at the base address in Ghidra/IDA), plus a .json sidecar with segments and symbols. Will not overwrite existing files.",
     inputSchema: { type: "object", properties: { path: P, out: { type: "string" }, base: BASE }, required: ["path", "out"] } },
 ];
+TOOLS.push(...RE_TOOLS);
 for (const t of TOOLS) t.annotations = { readOnlyHint: !["annotate", "extract_image"].includes(t.name) };
 
 function segData(img, name) {
@@ -732,6 +734,10 @@ export function callTool(name, args = {}) {
       `notes:`, ann.notes || "  (none)"];
     return text(lines.join("\n"));
   }
+
+  if (name === "list_functions") return listFunctions(img, args);
+  if (name === "call_graph") return callGraphTool(img, args, resolveAddr);
+  if (name === "scan_syscalls") return scanSyscallsTool(img, args);
 
   throw new Error(`Unknown tool: ${name}`);
 }
