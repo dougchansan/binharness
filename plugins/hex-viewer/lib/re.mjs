@@ -2,7 +2,7 @@
 // MOD0/.dynamic parsing, relocation application (RELR + RELA relative),
 // function-boundary recovery, call graph, and syscall scanning.
 // Pure analysis over an image produced by bintools.openImage().
-import { hex, segmentAt, extractStrings, findXrefs } from "./bintools.mjs";
+import { hex, extractStrings, findXrefs, warnOnce } from "./core.mjs";
 import { spawnSync } from "node:child_process";
 
 // Known Horizon service namespaces (part before ':') and bare service names.
@@ -300,6 +300,7 @@ export function scanRtti(img) {
   // 2. demangle in one batch (c++filt -t).
   const names = [...nameOff.values()];
   const r = spawnSync("c++filt", ["-t"], { input: names.join("\n"), encoding: "utf8", maxBuffer: 64 << 20 });
+  if (r.error?.code === "ENOENT") warnOnce("cxxfilt", "c++filt not found on PATH — RTTI class names will stay mangled. Install binutils/LLVM to demangle.");
   const demangled = new Map();
   if (r.status === 0 && r.stdout) { const out = r.stdout.split("\n"); names.forEach((m, i) => { if (out[i] && out[i] !== m) demangled.set(m, out[i]); }); }
   // 3. relocations: find type_info (a struct whose +8 slot points to a name) and
