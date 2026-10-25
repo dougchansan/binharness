@@ -1,6 +1,6 @@
 {
   "name": "hex-viewer",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "View and reverse engineer binary files inside Codex: hex viewer plus Switch NSO/NRO/NSP/XCI parsing, AArch64 disassembly, xrefs and persistent annotations.",
   "author": { "name": "dougchansan", "url": "https://github.com/dougchansan" },
   "license": "MIT",

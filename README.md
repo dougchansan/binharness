@@ -20,6 +20,9 @@ A binary-analysis toolkit for Nintendo Switch executables and any other file, pa
 | `label_syscalls` | Auto-name every `nn::svc` wrapper (`svcSleepThread`, …) and comment each site; names then flow into disassembly, `list_functions` and `call_graph` |
 | `find_services` | Find Switch IPC service names in rodata (`fsp-srv`, `set:sys`, `nifm:u`, …) and the functions that use each, by reference count |
 | `label_services` | Label referencing functions `use_<service>` and comment the service strings, as persistent annotations |
+| `parse_npdm` | Parse `main.npdm`: program id, and the authoritative Service Access Control (which services a module **hosts** vs **connects to**) + kernel syscall allowlist |
+| `find_rtti` | Recover C++ class names from Itanium RTTI — demangled `type_info` names, each class's vtable and virtual-method count |
+| `label_rtti` | Name every vtable (`vtable_<Class>`) and virtual method (`<Class>::vf<n>`) from RTTI, as persistent annotations — a large name-recovery pass |
 | `find_xrefs` | Calls, branches and data refs to an address, with the enclosing function |
 | `find_string_refs` | Strings matching text → the code that uses them (fastest way into unknown code) |
 | `list_symbols` | Demangled dynsym symbols and your saved labels |

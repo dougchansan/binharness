@@ -10,7 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { openImage, extractStrings, hex } from "../plugins/hex-viewer/lib/bintools.mjs";
-import { findServices } from "../plugins/hex-viewer/lib/re.mjs";
+import { findServices, parseNpdm } from "../plugins/hex-viewer/lib/re.mjs";
 
 function buildIndex(dir) {
   dir = path.resolve(dir);
@@ -27,6 +27,9 @@ function buildIndex(dir) {
     }
     let services = [];
     try { services = findServices(img).map((s) => ({ name: s.name, refs: s.refs.length })); } catch { /* skip */ }
+    let npdm = null;
+    const npdmPath = path.join(dir, name, "main.npdm");
+    try { if (fs.existsSync(npdmPath)) { const n = parseNpdm(fs.readFileSync(npdmPath)); npdm = { name: n.name, programId: n.programId, services: n.services }; } } catch { /* skip */ }
     modules.push({
       title: name,
       buildId: img.buildId,
@@ -34,7 +37,7 @@ function buildIndex(dir) {
       memSize: img.data.length,
       segments: img.segments.map((s) => ({ name: s.name, size: s.size })),
       symbols: img.symbols.length,
-      services,
+      services, npdm,
       strings: strings.map((s) => [s.addr, s.text]),
     });
   }
@@ -79,18 +82,24 @@ function report(index) {
 // server; widely-referenced services (sm:, fsp-srv) are owned elsewhere and the
 // counts just reflect how heavily each caller uses them.
 function servicesReport(index) {
-  const ok = index.modules.filter((m) => !m.error && m.services);
-  const map = new Map(); // service -> [{title, refs}]
-  for (const m of ok) for (const s of m.services) (map.get(s.name) || map.set(s.name, []).get(s.name)).push({ title: m.title, refs: s.refs });
-  const rows = [...map.entries()].map(([name, users]) => ({ name, users: users.sort((a, b) => b.refs - a.refs) }))
-    .sort((a, b) => b.users.length - a.users.length || a.name.localeCompare(b.name));
-  const sole = rows.filter((r) => r.users.length === 1);
-  const lines = [`# Switch firmware IPC service map`, ``, `- Source: \`${index.dir}\``, `- Modules with services: **${ok.length}**  ·  distinct services: **${map.size}**`, ``,
-    `Reference-based: each module listed *references* that service name, whether it serves or connects to it — the name string alone can't tell which. Counts are how many modules touch the service and how many times the top module references it.`, ``,
-    `## Shared services (most widely referenced)`, ``, `| Service | Modules | Heaviest user (refs) |`, `| --- | --- | --- |`];
-  for (const r of rows.filter((x) => x.users.length > 1).slice(0, 40)) lines.push(`| \`${r.name}\` | ${r.users.length} | ${r.users[0].title.slice(-8)} (${r.users[0].refs}) |`);
-  lines.push(``, `## Single-module services (likely that module's own)`, ``, `| Service | Module |`, `| --- | --- |`,
-    ...sole.slice(0, 60).map((r) => `| \`${r.name}\` | ${r.users[0].title.slice(-8)} |`));
+  const withNpdm = index.modules.filter((m) => m.npdm && m.npdm.services);
+  // Authoritative map from NPDM Service Access Control: who hosts vs connects.
+  const map = new Map(); // service -> {hosts:Set, clients:Set}
+  const label = (m) => (m.npdm && m.npdm.name) || m.title.slice(-8);
+  for (const m of withNpdm) for (const s of m.npdm.services) {
+    const e = map.get(s.name) || map.set(s.name, { hosts: new Set(), clients: new Set() }).get(s.name);
+    (s.host ? e.hosts : e.clients).add(label(m));
+  }
+  const rows = [...map.entries()].map(([name, e]) => ({ name, hosts: [...e.hosts], clients: [...e.clients] }))
+    .sort((a, b) => b.clients.length - a.clients.length || a.name.localeCompare(b.name));
+  const lines = [`# Switch firmware IPC service map`, ``, `- Source: \`${index.dir}\``,
+    `- Modules with NPDM: **${withNpdm.length}**  ·  distinct services: **${map.size}**`, ``,
+    `Authoritative, from each module's NPDM Service Access Control (ground truth, not reference-guessing): **hosts** = the module registers/implements the service; **clients** = modules permitted to connect.`, ``,
+    `## Most-depended-on services`, ``, `| Service | Hosted by | Clients |`, `| --- | --- | --- |`];
+  for (const r of rows.slice(0, 50)) lines.push(`| \`${r.name}\` | ${r.hosts.join(", ") || "**?** (host not in dump)"} | ${r.clients.length} |`);
+  const orphanHosts = rows.filter((r) => r.hosts.length === 0);
+  if (orphanHosts.length) lines.push(``, `## Services with clients but no host in this dump (${orphanHosts.length})`, ``,
+    orphanHosts.map((r) => `\`${r.name}\``).join(" "));
   return lines.join("\n");
 }
 

@@ -77,3 +77,28 @@ test("find_services runs (fixture has no service names)", () => {
 test("label_services runs without error", () => {
   assert.match(run("label_services"), /services:/);
 });
+
+test("parseNpdm reads program id, SAC and syscall allowlist", async () => {
+  const { parseNpdm } = await import("../plugins/hex-viewer/lib/re.mjs");
+  const b = Buffer.alloc(0x80 + 0x60);
+  b.write("META", 0, "latin1"); b[0x0c] = 1; b.write("testmod", 0x20, "latin1");
+  b.writeUInt32LE(0x80, 0x70); b.writeUInt32LE(0x60, 0x74);
+  const a = 0x80; b.write("ACI0", a, "latin1"); b.writeBigUInt64LE(0x0100000000000040n, a + 0x10);
+  // ACI0 header runs to 0x38; put SAC data at a+0x40, KAC at a+0x50.
+  b.writeUInt32LE(0x40, a + 0x28);                                 // sac off (rel to ACI0)
+  let o = a + 0x40; b[o++] = 0x82; b.write("sm:", o, "latin1"); o += 3; b[o++] = 0x01; b.write("lm", o, "latin1"); o += 2;
+  b.writeUInt32LE(o - (a + 0x40), a + 0x2c);                       // sac size
+  b.writeUInt32LE(0x50, a + 0x30);                                 // kac off
+  b.writeUInt32LE(0x0f | ((1 << 0x0b) << 5), a + 0x50);            // SyscallMask granting svc 0x0b
+  b.writeUInt32LE(4, a + 0x34);                                   // kac size
+  const n = parseNpdm(b);
+  assert.equal(n.name, "testmod");
+  assert.equal(n.programId, "0x0100000000000040");
+  assert.deepEqual(n.services.find((s) => s.name === "sm:"), { name: "sm:", host: true });
+  assert.equal(n.services.find((s) => s.name === "lm").host, false);
+  assert.ok(n.allowedSyscalls.includes(0x0b));
+});
+test("find_rtti / label_rtti run on a non-RTTI module", () => {
+  assert.match(run("find_rtti"), /no C\+\+ RTTI|RTTI classes/);
+  assert.match(run("label_rtti"), /classes:/);
+});

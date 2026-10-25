@@ -3,6 +3,7 @@
 // function-boundary recovery, call graph, and syscall scanning.
 // Pure analysis over an image produced by bintools.openImage().
 import { hex, segmentAt, extractStrings, findXrefs } from "./bintools.mjs";
+import { spawnSync } from "node:child_process";
 
 // Known Horizon service namespaces (part before ':') and bare service names.
 // Used to filter rodata strings down to real services with low false positives.
@@ -207,6 +208,41 @@ export function findServices(img) {
     .sort((a, b) => b.refs.length - a.refs.length || a.name.localeCompare(b.name));
 }
 
+// Parse a main.npdm (program metadata). Returns the program id, the authoritative
+// service access list (which services the module may host vs connect to), and the
+// kernel-capability syscall allowlist. This is ground truth, unlike reference scans.
+export function parseNpdm(buf) {
+  if (buf.toString("latin1", 0, 4) !== "META") throw new Error("not an NPDM (no META magic)");
+  const flags = buf[0x0c];
+  const out = {
+    name: buf.toString("latin1", 0x20, 0x30).replace(/\0+$/, ""),
+    is64Bit: !!(flags & 1), mainThreadPriority: buf[0x0e], mainThreadCore: buf[0x0f],
+    services: [], allowedSyscalls: [],
+  };
+  const aci = buf.readUInt32LE(0x70);
+  if (buf.toString("latin1", aci, aci + 4) !== "ACI0") throw new Error("NPDM missing ACI0");
+  out.programId = "0x" + buf.readBigUInt64LE(aci + 0x10).toString(16).padStart(16, "0");
+  // ServiceAccessControl: entries of [control byte][name]. bit7 = may host; low 3 bits = len-1.
+  let o = aci + buf.readUInt32LE(aci + 0x28), end = o + buf.readUInt32LE(aci + 0x2c);
+  while (o < end) {
+    const c = buf[o++], len = (c & 7) + 1;
+    if (o + len > end) break;
+    out.services.push({ name: buf.toString("latin1", o, o + len), host: !!(c & 0x80) });
+    o += len;
+  }
+  // KernelAccessControl: decode SyscallMask descriptors into allowed syscall numbers.
+  let k = aci + buf.readUInt32LE(aci + 0x30), kend = k + buf.readUInt32LE(aci + 0x34);
+  for (; k + 4 <= kend; k += 4) {
+    const desc = buf.readUInt32LE(k);
+    if ((desc & 0x1f) === 0x0f) { // SyscallMask: marker 0b01111
+      const index = (desc >>> 29) & 7, mask = (desc >>> 5) & 0xffffff;
+      for (let i = 0; i < 24; i++) if (mask & (1 << i)) out.allowedSyscalls.push(index * 24 + i);
+    }
+  }
+  out.allowedSyscalls.sort((a, b) => a - b);
+  return out;
+}
+
 export function scanSyscalls(img) {
   const text = parseDynamic(img).text, d = img.data, dv = new DataView(d.buffer, d.byteOffset);
   const sites = [];
@@ -215,6 +251,54 @@ export function scanSyscalls(img) {
     if (((w & 0xffe0001f) >>> 0) === 0xd4000001) sites.push({ addr: img.base + o, num: (w >>> 5) & 0xffff });
   }
   return sites;
+}
+
+// ---------- C++ RTTI / vtable recovery ----------
+
+// Recover class names from Itanium RTTI: type_info name strings in rodata, their
+// type_info objects, and the vtables that point at them (giving virtual methods).
+export function scanRtti(img) {
+  const d = img.data, dv = new DataView(d.buffer, d.byteOffset);
+  const text = parseDynamic(img).text;
+  const inText = (o) => o >= text.start && o < text.start + text.size;
+  // 1. candidate mangled type names in rodata/data.
+  const nameOff = new Map(); // image-offset -> mangled text
+  for (const sn of ["rodata", "data"]) {
+    const s = img.segments.find((x) => x.name === sn);
+    if (!s) continue;
+    for (const st of extractStrings(d.subarray(s.start, s.start + s.size), s.start, 2, 2e5)) {
+      if (/^(N[0-9]|[0-9]{1,3}[A-Za-z_]|St[0-9]|[PK]+[0-9N])/.test(st.text) && st.text.length < 120) nameOff.set(st.addr, st.text);
+    }
+  }
+  if (!nameOff.size) return [];
+  // 2. demangle in one batch (c++filt -t).
+  const names = [...nameOff.values()];
+  const r = spawnSync("c++filt", ["-t"], { input: names.join("\n"), encoding: "utf8", maxBuffer: 64 << 20 });
+  const demangled = new Map();
+  if (r.status === 0 && r.stdout) { const out = r.stdout.split("\n"); names.forEach((m, i) => { if (out[i] && out[i] !== m) demangled.set(m, out[i]); }); }
+  // 3. relocations: find type_info (a struct whose +8 slot points to a name) and
+  //    vtables (whose -8 slot points to a type_info).
+  const relocs = getRelocations(img);           // loc -> target (image offsets)
+  const typeInfoAt = new Map();                  // typeInfoOff -> nameOff
+  for (const [loc, tgt] of relocs) if (nameOff.has(tgt) && loc >= 8) typeInfoAt.set(loc - 8, tgt);
+  const classes = new Map(); // nameOff -> {mangled, name, typeInfo, vtables:[]}
+  for (const [tiOff, nOff] of typeInfoAt) {
+    const mangled = nameOff.get(nOff);
+    classes.set(nOff, { mangled, name: demangled.get(mangled) || mangled, typeInfo: img.base + tiOff, vtables: [] });
+  }
+  const vtableBoundary = new Set([...typeInfoAt.keys()].map((ti) => ti + 8)); // where another vtable's -8 slot sits
+  for (const [loc, tgt] of relocs) {
+    if (!typeInfoAt.has(tgt)) continue;          // loc's slot points at a type_info -> loc+8 is a vtable
+    const vtOff = loc + 8;
+    let n = 0;
+    for (let o = vtOff; relocs.has(o) && inText(relocs.get(o)) && n < 400; o += 8) {
+      if (n > 0 && vtableBoundary.has(o - 8)) break; // next class's type_info slot -> stop
+      n++;
+    }
+    if (n) classes.get(typeInfoAt.get(tgt)).vtables.push({ off: vtOff, addr: img.base + vtOff, methods: n });
+  }
+  return [...classes.values()].filter((c) => demangled.has(c.mangled) || c.vtables.length)
+    .sort((a, b) => (b.vtables[0]?.methods || 0) - (a.vtables[0]?.methods || 0));
 }
 
 // ---------- tool handlers (return {text, structuredContent}) ----------
@@ -267,6 +351,42 @@ export function callGraphTool(img, args, resolveAddr) {
   return { content: [{ type: "text", text: header + "\n" + (lines.join("\n") || "(no edges found)") }], structuredContent: { function: f.addr, nodes } };
 }
 
+export function npdmTool(buf, img) {
+  const n = parseNpdm(buf);
+  const hosts = n.services.filter((s) => s.host).map((s) => s.name);
+  const uses = n.services.filter((s) => !s.host).map((s) => s.name);
+  const lines = [
+    `${n.name}  ${n.programId}  ${n.is64Bit ? "64-bit" : "32-bit"}  (main-thread prio ${n.mainThreadPriority}, core ${n.mainThreadCore})`,
+    `hosts (${hosts.length}): ${hosts.join(" ") || "—"}`,
+    `connects to (${uses.length}): ${uses.join(" ") || "—"}`,
+    `allowed syscalls (${n.allowedSyscalls.length}): ${n.allowedSyscalls.map((s) => SVC_NAMES[s] || "0x" + s.toString(16)).join(", ")}`,
+  ];
+  // If given the matching module image, note how the linked svc wrappers relate to
+  // the allowlist. The wrapper scan counts statically-linked wrappers, not calls
+  // actually made, so wrappers outside the allowlist are typically just unused.
+  if (img) {
+    const present = new Set(scanSyscalls(img).map((s) => s.num));
+    const allowed = new Set(n.allowedSyscalls);
+    const extra = [...present].filter((s) => !allowed.has(s)).sort((a, b) => a - b);
+    lines.push(`svc wrappers present: ${present.size} distinct; ${extra.length ? extra.length + " outside the allowlist (likely unused linked wrappers): " + extra.map((s) => SVC_NAMES[s] || "0x" + s.toString(16)).join(", ") : "all within the NPDM allowlist"}`);
+  }
+  return { content: [{ type: "text", text: lines.join("\n") }], structuredContent: { programId: n.programId, hosts, uses, allowedSyscalls: n.allowedSyscalls } };
+}
+
+export function findRttiTool(img, args) {
+  const classes = scanRtti(img);
+  const re = args.filter ? new RegExp(args.filter, "i") : null;
+  const rows = (re ? classes.filter((c) => re.test(c.name)) : classes).slice(0, args.limit || 200);
+  const text = classes.length
+    ? `${classes.length} RTTI classes (${classes.filter((c) => c.vtables.length).length} with vtables):\n` +
+      rows.map((c) => {
+        const vt = c.vtables[0];
+        return `  ${vt ? vt.addr.toString(16) : "          "}  ${vt ? (vt.methods + " vm").padStart(6) : "      "}  ${c.name}`;
+      }).join("\n")
+    : "no C++ RTTI found (module may be built without RTTI)";
+  return { content: [{ type: "text", text }], structuredContent: { classes: rows.map((c) => ({ name: c.name, vtable: c.vtables[0]?.addr, methods: c.vtables[0]?.methods || 0 })) } };
+}
+
 export function findServicesTool(img, args) {
   const svcs = findServices(img);
   const re = args.filter ? new RegExp(args.filter, "i") : null;
@@ -300,5 +420,7 @@ export const RE_TOOLS = [
     inputSchema: { type: "object", properties: { path: { type: "string" }, base: { type: "string" } }, required: ["path"] } },
   { name: "find_services", description: "Find Switch IPC service names in rodata (fsp-srv, set:sys, nifm:u, ldr:ro, …) and the functions that reference each one, sorted by reference count. Shows which system services a module registers or talks to.",
     inputSchema: { type: "object", properties: { path: { type: "string" }, filter: { type: "string", description: "Regex on the service name." }, base: { type: "string" } }, required: ["path"] } },
+  { name: "find_rtti", description: "Recover C++ class names from Itanium RTTI: demangles type_info name strings and locates each class's vtable and its number of virtual methods. The richest source of names in a stripped C++ module (nn::fs::RomFsFileSystem, DisplayPort::Connector, …).",
+    inputSchema: { type: "object", properties: { path: { type: "string" }, filter: { type: "string", description: "Regex on the demangled class name." }, limit: { type: "integer", default: 200 }, base: { type: "string" } }, required: ["path"] } },
 ];
 for (const t of RE_TOOLS) t.annotations = { readOnlyHint: true };

@@ -6,7 +6,7 @@ import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { RE_TOOLS, listFunctions, callGraphTool, scanSyscallsTool, scanSyscalls, functionAt, SVC_NAMES, findServices, findServicesTool } from "./re.mjs";
+import { RE_TOOLS, listFunctions, callGraphTool, scanSyscallsTool, scanSyscalls, functionAt, SVC_NAMES, findServices, findServicesTool, parseNpdm, npdmTool, scanRtti, findRttiTool, getRelocations } from "./re.mjs";
 
 export const MAX_CHUNK = 64 * 1024;
 export const DEFAULT_SWITCH_BASE = 0x7100000000;
@@ -564,6 +564,18 @@ TOOLS.push({
   annotations: { readOnlyHint: false },
 });
 TOOLS.push({
+  name: "label_rtti",
+  description: "Name every recovered vtable (vtable_<Class>) and its virtual-method functions (<Class>::vf<n>) from C++ RTTI, as persistent annotations. One of the biggest name-recovery passes for a stripped C++ module; run after find_rtti looks right.",
+  inputSchema: { type: "object", properties: { path: { type: "string" }, base: { type: "string" }, dry_run: { type: "boolean" } }, required: ["path"] },
+  annotations: { readOnlyHint: false },
+});
+TOOLS.push({
+  name: "parse_npdm",
+  description: "Parse a main.npdm (Switch program metadata): program id, 32/64-bit, and the authoritative Service Access Control — which services the module may HOST (register) vs CONNECT to — plus the kernel syscall allowlist. If a sibling `main` NSO exists, cross-checks the syscalls the code actually issues against the allowlist. This is ground truth, unlike find_services/scan_syscalls.",
+  inputSchema: { type: "object", properties: { path: { type: "string", description: "Path to the .npdm file." } }, required: ["path"] },
+  annotations: { readOnlyHint: true },
+});
+TOOLS.push({
   name: "label_services",
   description: "Label the functions that reference each IPC service as use_<service> (e.g. use_fsp_srv) and comment the service-name strings. Saved as persistent annotations so names appear in disassemble, list_functions and call_graph.",
   inputSchema: { type: "object", properties: { path: { type: "string" }, base: { type: "string" }, dry_run: { type: "boolean" } }, required: ["path"] },
@@ -609,6 +621,14 @@ export function callTool(name, args = {}) {
     return text(`sizes: ${sa} vs ${sb}\n${diffs.length ? lines.join("\n") : "no differences in range"}`, { diffs });
   }
 
+  if (name === "parse_npdm") {
+    const npdmFile = resolvePath(args.path);
+    const buf = fs.readFileSync(npdmFile);
+    const sibling = path.join(path.dirname(npdmFile), "main");
+    let img = null; try { if (fs.existsSync(sibling)) img = openImage(sibling); } catch { /* ignore */ }
+    return npdmTool(buf, img);
+  }
+
   const file = resolvePath(args.path);
   const head = readRange(file, 0, 0x200);
   const format = detectFormat(head.buf, head.size, file);
@@ -622,6 +642,8 @@ export function callTool(name, args = {}) {
       for (const s of img.segments) lines.push(`  ${s.name.padEnd(7)} ${hex(img.base + s.start)} - ${hex(img.base + s.start + s.size)}  ${s.perm}  ${hex(s.size)}${s.compressed ? "  (lz4)" : ""}`);
       const f = img.symbols.filter((s) => !s.imported).length;
       lines.push(`symbols: ${img.symbols.length} (${f} defined, ${img.symbols.length - f} imported); labels: ${img.sortedNamed.length - new Set(img.symbols.filter((s) => s.addr).map((s) => s.addr)).size} saved`);
+    } else if (/NPDM/.test(format || "")) {
+      try { const n = parseNpdm(readRange(file, 0, head.size).buf); lines.push(`${n.name}  ${n.programId}  ${n.is64Bit ? "64-bit" : "32-bit"}`, `hosts: ${n.services.filter((x) => x.host).map((x) => x.name).join(" ") || "—"}`, `connects to: ${n.services.filter((x) => !x.host).map((x) => x.name).join(" ") || "—"}`); } catch (e) { lines.push("(NPDM parse failed: " + e.message + ")"); }
     } else if (/PFS0|HFS0/.test(format || "")) {
       const p = parsePfs0(file);
       lines.push(...p.files.map((f) => `  ${f.name}  @${hex(f.offset)}  ${f.size} bytes`));
@@ -768,6 +790,25 @@ export function callTool(name, args = {}) {
     return { content: [{ type: "text", text }], structuredContent: { labeled, commented } };
   }
   if (name === "find_services") return findServicesTool(img, args);
+  if (name === "find_rtti") return findRttiTool(img, args);
+  if (name === "label_rtti") {
+    const ann = loadAnnotations(img);
+    const classes = scanRtti(img), relocs = getRelocations(img);
+    let vt = 0, methods = 0;
+    for (const c of classes) {
+      const base = c.name.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+      for (const v of c.vtables) {
+        if (!ann.labels[v.addr]) { ann.labels[v.addr] = `vtable_${base}`; vt++; }
+        for (let i = 0; i < v.methods; i++) {
+          const fp = relocs.get(v.off + i * 8); if (fp === undefined) continue;
+          const fa = img.base + fp;
+          if (!ann.labels[fa] && !img.addrNames.has(fa)) { ann.labels[fa] = `${base}::vf${i}`; methods++; }
+        }
+      }
+    }
+    if (!args.dry_run) { saveAnnotations(img, ann); finishSymbols(img); }
+    return { content: [{ type: "text", text: `${classes.length} classes: ${vt} vtables and ${methods} virtual methods ${args.dry_run ? "would be " : ""}labeled.` }], structuredContent: { vtables: vt, methods } };
+  }
   if (name === "label_services") {
     const ann = loadAnnotations(img);
     const svcs = findServices(img);
