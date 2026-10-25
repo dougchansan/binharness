@@ -106,7 +106,8 @@ test("find_rtti / label_rtti run on a non-RTTI module", () => {
 test("export_symbols writes Ghidra and IDA scripts", () => {
   const out = path.join(home, "export");
   const t = callTool("export_symbols", { path: fixture, out, format: "both" }).content[0].text;
-  assert.match(t, /functions,.*labels,.*comments/);
+  assert.match(t, /functions.*labels.*comments/);
+  assert.match(t, /label_rtti:/); // auto-labels before export
   for (const suf of [".ghidra.py", ".ida.py"]) {
     const src = fs.readFileSync(out + suf, "utf8");
     assert.match(src, /nnMain|sub_7100000000/);

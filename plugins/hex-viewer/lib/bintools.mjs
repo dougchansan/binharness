@@ -565,8 +565,8 @@ TOOLS.push({
 });
 TOOLS.push({
   name: "export_symbols",
-  description: "Export everything recovered (function boundaries + names, RTTI vtables, svc/service labels, saved labels and comments) as Ghidra and/or IDA import scripts, so the names carry into a full disassembler. Pair with extract_image: load the image at the base address, then run the script. format: ghidra | ida | both (default) | json.",
-  inputSchema: { type: "object", properties: { path: { type: "string" }, out: { type: "string", description: "Output path prefix (e.g. ./ngc). Suffixes .ghidra.py/.ida.py/.names.json are added." }, format: { type: "string", enum: ["ghidra", "ida", "both", "json"], default: "both" }, base: { type: "string" } }, required: ["path", "out"] },
+  description: "Export everything recovered (function boundaries + names, RTTI vtables, svc/service labels, saved labels and comments) as Ghidra and/or IDA import scripts, so the names carry into a full disassembler. Runs the RTTI/syscall/service naming passes first by default (set label:false to export only what's already labeled). Pair with extract_image: load the image at the base address, then run the script. format: ghidra | ida | both (default) | json.",
+  inputSchema: { type: "object", properties: { path: { type: "string" }, out: { type: "string", description: "Output path prefix (e.g. ./ngc). Suffixes .ghidra.py/.ida.py/.names.json are added." }, format: { type: "string", enum: ["ghidra", "ida", "both", "json"], default: "both" }, label: { type: "boolean", description: "Run RTTI/syscall/service labeling first (default true)." }, base: { type: "string" } }, required: ["path", "out"] },
   annotations: { readOnlyHint: false },
 });
 TOOLS.push({
@@ -798,6 +798,11 @@ export function callTool(name, args = {}) {
   if (name === "find_services") return findServicesTool(img, args);
   if (name === "find_rtti") return findRttiTool(img, args);
   if (name === "export_symbols") {
+    // Run the naming passes first so the export is never empty (opt out with label:false).
+    const passes = [];
+    if (args.label !== false) for (const p of ["label_rtti", "label_syscalls", "label_services"]) {
+      try { const r = callTool(p, { path: args.path, base: args.base }); passes.push(`${p}: ${r.content[0].text.split("\n")[0]}`); } catch (e) { passes.push(`${p}: skipped (${e.message})`); }
+    }
     const sym = collectSymbols(img, loadAnnotations(img));
     const meta = { name: path.basename(path.dirname(file)) === "." ? path.basename(file) : path.basename(file), base: img.base, buildId: img.buildId };
     const out = resolvePath(args.out), fmt = args.format || "both", written = [];
@@ -805,7 +810,8 @@ export function callTool(name, args = {}) {
     if (fmt === "ghidra" || fmt === "both") write(".ghidra.py", emitGhidra(sym, meta));
     if (fmt === "ida" || fmt === "both") write(".ida.py", emitIda(sym, meta));
     if (fmt === "json") write(".names.json", JSON.stringify(sym, null, 1));
-    return { content: [{ type: "text", text: `exported ${sym.functions.length} functions, ${sym.labels.length} labels, ${sym.comments.length} comments to:\n${written.join("\n")}` }], structuredContent: { functions: sym.functions.length, labels: sym.labels.length, comments: sym.comments.length, files: written } };
+    const named = sym.functions.filter((f) => !/^sub_/.test(f.name)).length;
+    return { content: [{ type: "text", text: `${passes.length ? passes.join("\n") + "\n" : ""}exported ${sym.functions.length} functions (${named} named), ${sym.labels.length} labels, ${sym.comments.length} comments to:\n${written.join("\n")}` }], structuredContent: { functions: sym.functions.length, named, labels: sym.labels.length, comments: sym.comments.length, files: written } };
   }
   if (name === "label_rtti") {
     const ann = loadAnnotations(img);
