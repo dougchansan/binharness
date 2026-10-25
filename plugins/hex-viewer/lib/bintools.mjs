@@ -6,7 +6,7 @@ import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { RE_TOOLS, listFunctions, callGraphTool, scanSyscallsTool } from "./re.mjs";
+import { RE_TOOLS, listFunctions, callGraphTool, scanSyscallsTool, scanSyscalls, functionAt, SVC_NAMES } from "./re.mjs";
 
 export const MAX_CHUNK = 64 * 1024;
 export const DEFAULT_SWITCH_BASE = 0x7100000000;
@@ -557,6 +557,12 @@ export const TOOLS = [
     inputSchema: { type: "object", properties: { path: P, out: { type: "string" }, base: BASE }, required: ["path", "out"] } },
 ];
 TOOLS.push(...RE_TOOLS);
+TOOLS.push({
+  name: "label_syscalls",
+  description: "Auto-name every nn::svc wrapper function (svcSleepThread, svcSendSyncRequest, …) and comment each `svc #n` site with its Horizon syscall name. Saves them as persistent annotations, so the names then appear in disassemble, list_functions and call_graph. Run this once on a fresh module.",
+  inputSchema: { type: "object", properties: { path: { type: "string" }, base: { type: "string" }, dry_run: { type: "boolean", description: "Preview without saving." } }, required: ["path"] },
+  annotations: { readOnlyHint: false },
+});
 for (const t of TOOLS) t.annotations = { readOnlyHint: !["annotate", "extract_image"].includes(t.name) };
 
 function segData(img, name) {
@@ -735,6 +741,26 @@ export function callTool(name, args = {}) {
     return text(lines.join("\n"));
   }
 
+  if (name === "label_syscalls") {
+    const ann = loadAnnotations(img);
+    const sites = scanSyscalls(img);
+    const perFunc = new Map(); // funcOff -> Set(num)
+    for (const st of sites) { const f = functionAt(img, st.addr); if (f) (perFunc.get(f.off) || perFunc.set(f.off, new Set()).get(f.off)).add(st.num); }
+    let labeled = 0, commented = 0;
+    const named = [];
+    for (const st of sites) {
+      const nm = SVC_NAMES[st.num];
+      if (ann.comments[st.addr] === undefined) { ann.comments[st.addr] = `svc #0x${st.num.toString(16)} ${nm || "Unknown"}`; commented++; }
+      const f = functionAt(img, st.addr);
+      // A wrapper is a small function whose only syscall is this one.
+      if (f && nm && perFunc.get(f.off).size === 1 && f.size <= 0x80 && !ann.labels[f.addr]) {
+        ann.labels[f.addr] = `svc${nm}`; labeled++; named.push(`${f.addr.toString(16)}  svc${nm}`);
+      }
+    }
+    if (!args.dry_run) { saveAnnotations(img, ann); finishSymbols(img); }
+    const text = `${sites.length} svc sites: ${labeled} wrapper functions ${args.dry_run ? "would be " : ""}named, ${commented} sites commented.\n` + named.slice(0, 40).join("\n");
+    return { content: [{ type: "text", text }], structuredContent: { labeled, commented } };
+  }
   if (name === "list_functions") return listFunctions(img, args);
   if (name === "call_graph") return callGraphTool(img, args, resolveAddr);
   if (name === "scan_syscalls") return scanSyscallsTool(img, args);
