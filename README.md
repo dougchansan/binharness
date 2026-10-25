@@ -2,8 +2,8 @@
 
 A binary-analysis toolkit focused on Nintendo Switch NSO/NRO modules, with raw-byte inspection for other files, packaged three ways:
 
-- **Codex plugin** (`hex-viewer`): an interactive hex viewer for compatible Codex clients, plus 24 analysis tools.
-- **MCP server**: 25 tools in total: `view_binary` and the 24 analysis tools. The interactive viewer needs a client that supports MCP Apps; other clients can use the text tools.
+- **Codex plugin** (`hex-viewer`): an interactive hex viewer for compatible Codex clients, plus analysis tools.
+- **MCP server**: the full toolset: `view_binary` and the analysis tools. The interactive viewer needs a client that supports MCP Apps; other clients can use the text tools.
 - **`deepseek-bin`**: a standalone CLI agent that uses the same tools with DeepSeek models.
 
 ![Hex Viewer showing a file with a search hit and the byte inspector](docs/screenshot.jpg)
@@ -13,6 +13,7 @@ A binary-analysis toolkit focused on Nintendo Switch NSO/NRO modules, with raw-b
 | Tool | What it does |
 | --- | --- |
 | `view_binary` | Interactive hex + ASCII viewer (Codex UI): go to offset, hex/text search, byte inspector |
+| `verify_nso` | Recompute SHA-256 over decompressed NSO segments and compare enabled header digests; report absent digest flags separately |
 | `file_info` | Identify format signatures; summarize NSO/NRO segments and symbols, NPDM declarations, or NSP/XCI container entries |
 | `disassemble` | AArch64 disassembly with branch/data-reference annotations; x86-64 instruction disassembly is also available with `arch: "x86-64"` |
 | `list_functions` | Estimate function boundaries from AArch64 call targets, relocations, init arrays and prologues |
@@ -66,13 +67,28 @@ Load `out.bin` as a flat AArch64 binary at the base recorded in `out.bin.json` (
 
 | Level | Formats and behavior |
 | --- | --- |
-| Structured executable analysis | NSO with LZ4 segments; NRO; available segment/symbol metadata and Switch AArch64 analysis heuristics |
+| Structured executable analysis | NSO with built-in LZ4 and optional externally decompressed ZBIC segments; NRO; available segment/symbol metadata and Switch AArch64 analysis heuristics |
 | Structured container/metadata reads | NSP/PFS0, XCI/HFS0 directory entries; NPDM ACI0 program/service/kernel declarations |
 | Identification plus raw-byte tools | ELF, Mach-O, PE, image/archive formats, SQLite, wasm, Nintendo asset signatures, and GameCube/Wii file/image signatures; detection does not imply a format-specific loader, extractor or decoder |
 
 Non-NSO/NRO inputs are treated as flat byte images for disassembly. ELF/Mach-O/PE sections and their load addresses are not mapped automatically. AArch64 reference/function analysis does not extend to x86-64 merely by selecting that disassembler. NSO/NRO addresses default to `0x7100000000`; override with `base` when needed.
 
 NPDM results describe ACI0 declarations. The parser does not verify the ACID signature or establish effective authorization after loader/platform checks. An allowed service or syscall need not be used, and a referenced service string does not identify its provider.
+
+### NSO hashes and optional ZBIC
+
+`verify_nso` computes SHA-256 over each *decompressed* NSO text/rodata/data segment and compares it with header offsets `0xA0`, `0xC0`, and `0xE0` **only when its hash-enable bit is set**. A missing flag means *not present*, never verified. `file_info` reports these states, and `extract_image` blocks a declared mismatch unless `ignore_hash_mismatch: true` is explicitly supplied. These checks establish consistency with the NSO's own digest fields—not authenticity or permission to share input data.
+
+NSO bit 7 selects **ZBIC**, a Switch 22.0+ modified Zstandard/BIC compression method. Binharness uses a deliberately **optional, user-installed executable**, not an embedded decoder: build [alula/beetool](https://github.com/alula/beetool) separately and set `BINHARNESS_BEETOOL` to the absolute path of its `hactool` executable before starting your MCP server or CLI. For example:
+
+```bash
+export BINHARNESS_BEETOOL=/absolute/path/to/beetool/hactool
+npm test
+```
+
+The executable is invoked strictly as `-t nso0 --uncompressed=<temporary-output> <temporary-input>`, with a temporary HOME/config directory to prevent hactool's default key-file search. The NSO is local, the helper's output is checked for matching metadata and segment hashes, and temporary files are erased. No helper, console keys, decrypted games, or third-party compression source is bundled, installed, downloaded, or published by binharness. An unconfigured ZBIC input raises a clear error instead of being misinterpreted as LZ4.
+
+The tests use an independent synthetic byte/hash oracle and a **mock helper** to check the ZBIC handoff, not ZBIC codec correctness. When beetool is installed, setting `BINHARNESS_BEETOOL` also enables an actual differential NSO/LZ4 comparison in `npm test`; testing genuine ZBIC frames requires separately sourced, authorized inputs. See [provenance](PROVENANCE.md).
 
 Encrypted NCA files can be identified and inspected as raw bytes, but this toolkit does not decrypt them, acquire console keys or extract files from encrypted NCAs. Supply an NSO/NRO you are authorized to analyze. See [provenance and distribution boundaries](PROVENANCE.md).
 

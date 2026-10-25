@@ -162,6 +162,10 @@ local results above do not assert an unobserved hosted CI result.
 - Use verified checkout/local-node instructions. Registry manifests remain
   publication metadata, not evidence of a live registry listing.
 
+## Subsequent additions (2026-10-25)
+
+The Kimi integration added three tracked text files, now included in the reviewed Git inventory. The NSO hashing and ZBIC interoperability work adds a text-only runtime module and a new synthetic/optional independent comparison suite. The runtime module is included in npm; the tests, helper executable, ZBIC frames, keys, and generated outputs are not. Distribution checks cover the updated inventory. This does not retroactively alter the initial v0.6.5 snapshot.
+
 ## What a pass means
 
 A pass means that the inspected source/archive fits this reviewed inventory and
