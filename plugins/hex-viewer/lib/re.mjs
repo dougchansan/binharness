@@ -223,7 +223,7 @@ export function buildCallGraph(img) {
 export function findServices(img) {
   const segs = ["rodata", "data"].map((n) => img.segments.find((s) => s.name === n)).filter(Boolean);
   const strs = [];
-  for (const s of segs) strs.push(...extractStrings(img.data.subarray(s.start, s.start + s.size), img.base + s.start, 2, 2e5));
+  for (const s of segs) for (const _s of extractStrings(img.data.subarray(s.start, s.start + s.size), img.base + s.start, 2, 2e5)) strs.push(_s);
   const seen = new Map(); // name -> addr (first)
   for (const s of strs) if (isServiceName(s.text) && !seen.has(s.text)) seen.set(s.text, s.addr);
   const addrs = [...seen.values()];
@@ -266,6 +266,38 @@ export function parseNpdm(buf) {
     }
   }
   out.allowedSyscalls.sort((a, b) => a - b);
+  return out;
+}
+
+// Name functions from diagnostic strings: trace/assert messages often embed the
+// C++ qualified name of the function that logs them, e.g. "RoModule::RelocateRel
+// is called". We extract Class::method tokens and, when exactly one unnamed
+// function references that string, name it.
+function methodLike(qualified) {
+  const last = qualified.split("::").pop();
+  if (/^k[A-Z]/.test(last)) return false;       // kConstant enum member
+  if (/^[A-Z0-9_]{2,}$/.test(last)) return false; // ALL_CAPS enum/macro
+  if (last.length < 2 || /\d{3,}/.test(qualified)) return false;
+  return true;
+}
+
+export function scanNameStrings(img) {
+  const segs = ["rodata", "data"].map((n) => img.segments.find((s) => s.name === n)).filter(Boolean);
+  const byAddr = new Map(); // string addr -> qualified name
+  for (const s of segs) for (const st of extractStrings(img.data.subarray(s.start, s.start + s.size), img.base + s.start, 4, 2e5)) {
+    const m = st.text.match(/\b((?:[A-Za-z_]\w*::)+[A-Za-z_]\w*)\b/);
+    if (m && !/^(std|__gnu|_GLOBAL)/.test(m[1]) && methodLike(m[1]) && !byAddr.has(st.addr)) byAddr.set(st.addr, m[1]);
+  }
+  if (!byAddr.size) return [];
+  const refs = findXrefs(img, [...byAddr.keys()], 10000);
+  // group refs by the function that contains them
+  const perString = new Map(); // string addr -> Set(funcOff)
+  for (const r of refs) { const f = functionAt(img, r.from); if (!f) continue; (perString.get(r.target) || perString.set(r.target, new Set()).get(r.target)).add(f.off); }
+  const out = [];
+  for (const [addr, name] of byAddr) {
+    const fns = perString.get(addr);
+    if (fns && fns.size === 1) out.push({ addr, name, funcOff: [...fns][0] });
+  }
   return out;
 }
 

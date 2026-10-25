@@ -8,7 +8,7 @@ import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { hex, sext, page, segmentAt, seg, nearestName, decodeRef, extractStrings, findXrefs, warnOnce } from "./core.mjs";
 export { hex, segmentAt, extractStrings, findXrefs } from "./core.mjs";
-import { RE_TOOLS, listFunctions, callGraphTool, scanSyscallsTool, scanSyscalls, functionAt, SVC_NAMES, findServices, findServicesTool, parseNpdm, npdmTool, scanRtti, findRttiTool, getRelocations, collectSymbols, emitGhidra, emitIda, resolveThunk } from "./re.mjs";
+import { RE_TOOLS, listFunctions, callGraphTool, scanSyscallsTool, scanSyscalls, functionAt, SVC_NAMES, findServices, findServicesTool, parseNpdm, npdmTool, scanRtti, findRttiTool, getRelocations, collectSymbols, emitGhidra, emitIda, resolveThunk, scanNameStrings } from "./re.mjs";
 
 export const MAX_CHUNK = 64 * 1024;
 export const DEFAULT_SWITCH_BASE = 0x7100000000;
@@ -498,6 +498,12 @@ TOOLS.push({
   annotations: { readOnlyHint: false },
 });
 TOOLS.push({
+  name: "label_from_strings",
+  description: "Name functions from diagnostic strings: trace/assert messages often embed the C++ qualified name of the function that logs them (e.g. \"RoModule::RelocateRel is called\"). When exactly one unnamed function references such a string, label it with that name. Persistent annotations.",
+  inputSchema: { type: "object", properties: { path: { type: "string" }, base: { type: "string" }, dry_run: { type: "boolean" } }, required: ["path"] },
+  annotations: { readOnlyHint: false },
+});
+TOOLS.push({
   name: "parse_npdm",
   description: "Parse a main.npdm (Switch program metadata): program id, 32/64-bit, and the authoritative Service Access Control — which services the module may HOST (register) vs CONNECT to — plus the kernel syscall allowlist. If a sibling `main` NSO exists, cross-checks the syscalls the code actually issues against the allowlist. This is ground truth, unlike find_services/scan_syscalls.",
   inputSchema: { type: "object", properties: { path: { type: "string", description: "Path to the .npdm file." } }, required: ["path"] },
@@ -644,9 +650,9 @@ export function callTool(name, args = {}) {
     for (const sname of ["rodata", "data"]) {
       const s = img.segments.find((x) => x.name === sname);
       if (!s) continue;
-      strs.push(...extractStrings(img.data.subarray(s.start, s.start + s.size), img.base + s.start, 3, lim, pat));
+      for (const _s of extractStrings(img.data.subarray(s.start, s.start + s.size), img.base + s.start, 3, lim, pat)) strs.push(_s);
     }
-    if (img.kind === "raw") strs.push(...extractStrings(img.data, img.base, 3, lim, pat));
+    if (img.kind === "raw") for (const _s of extractStrings(img.data, img.base, 3, lim, pat)) strs.push(_s);
     const pick = strs.slice(0, lim);
     if (!pick.length) return text(`no strings containing "${args.text}"`);
     const refs = findXrefs(img, pick.map((s) => s.addr), 5000);
@@ -717,12 +723,24 @@ export function callTool(name, args = {}) {
     const text = `${sites.length} svc sites: ${labeled} wrapper functions ${args.dry_run ? "would be " : ""}named, ${commented} sites commented.\n` + named.slice(0, 40).join("\n");
     return { content: [{ type: "text", text }], structuredContent: { labeled, commented } };
   }
+  if (name === "label_from_strings") {
+    const ann = loadAnnotations(img);
+    const hits = scanNameStrings(img);
+    let labeled = 0; const named = [];
+    for (const h of hits) {
+      const fa = img.base + h.funcOff;
+      if (ann.comments[h.addr] === undefined) ann.comments[h.addr] = `names ${h.name}`;
+      if (!ann.labels[fa] && !img.addrNames.has(fa)) { ann.labels[fa] = h.name.replace(/[^A-Za-z0-9]+/g, "_"); labeled++; named.push(`${fa.toString(16)}  ${h.name}`); }
+    }
+    if (!args.dry_run) { saveAnnotations(img, ann); finishSymbols(img); }
+    return { content: [{ type: "text", text: `${hits.length} name-bearing strings; ${labeled} functions ${args.dry_run ? "would be " : ""}named.\n` + named.slice(0, 40).join("\n") }], structuredContent: { labeled } };
+  }
   if (name === "find_services") return findServicesTool(img, args);
   if (name === "find_rtti") return findRttiTool(img, args);
   if (name === "export_symbols") {
     // Run the naming passes first so the export is never empty (opt out with label:false).
     const passes = [];
-    if (args.label !== false) for (const p of ["label_rtti", "label_syscalls", "label_services"]) {
+    if (args.label !== false) for (const p of ["label_rtti", "label_syscalls", "label_services", "label_from_strings"]) {
       try { const r = callTool(p, { path: args.path, base: args.base }); passes.push(`${p}: ${r.content[0].text.split("\n")[0]}`); } catch (e) { passes.push(`${p}: skipped (${e.message})`); }
     }
     const sym = collectSymbols(img, loadAnnotations(img));

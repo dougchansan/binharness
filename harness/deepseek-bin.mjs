@@ -259,6 +259,7 @@ function recon(file) {
   step("label_rtti", "label_rtti", {});
   step("label_syscalls", "label_syscalls", {});
   step("label_services", "label_services", {});
+  step("label_from_strings", "label_from_strings", {});
   step("list_functions", "list_functions", { named_only: true, limit: 40 });
   messages.push(
     { role: "user", content: `I ran recon on ${file}. Structure and names are already established (RTTI classes, svc wrappers and service users are labeled and persist). Here is the summary; use it instead of re-running these passes:\n\n${summary.join("\n\n")}` },

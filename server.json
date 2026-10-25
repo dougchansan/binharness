@@ -3,12 +3,12 @@
   "name": "io.github.dougchansan/binharness",
   "description": "Reverse-engineering toolkit for stripped Nintendo Switch modules and any binary: hex viewer, NSO/NRO/NSP parsing, AArch64 disassembly, function/RTTI/syscall/service recovery, Ghidra/IDA export.",
   "repository": { "url": "https://github.com/dougchansan/binharness", "source": "github" },
-  "version": "0.6.4",
+  "version": "0.6.5",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "binharness",
-      "version": "0.6.4",
+      "version": "0.6.5",
       "transport": { "type": "stdio" },
       "runtimeHint": "npx",
       "runtimeArguments": [

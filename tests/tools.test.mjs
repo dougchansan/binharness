@@ -124,3 +124,7 @@ test("resolveThunk follows a b-veneer to the real target", async () => {
   assert.equal(resolveThunk(img, 0x7100000000), 0x7100000040);
   assert.equal(resolveThunk(img, 0x7100000040), 0x7100000040); // not a thunk -> unchanged
 });
+
+test("label_from_strings runs (fixture has no qualified-name strings)", () => {
+  assert.match(run("label_from_strings"), /name-bearing strings;.*named/);
+});
