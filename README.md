@@ -1,10 +1,9 @@
 # binharness
 
-A reverse-engineering toolkit for stripped Nintendo Switch modules (and any binary), packaged three ways:
+A binary-analysis toolkit focused on Nintendo Switch NSO/NRO modules, with raw-byte inspection for other files, packaged three ways:
 
-- **Codex plugin** (`hex-viewer`): an interactive hex viewer that renders inline in Codex (for when the file pane says *"Binary file previews aren't supported yet"*), plus 24 RE tools Codex can call.
-- **MCP server**: the same tools for any MCP client (`npx -y binharness binharness-mcp`).
-- **`deepseek-bin`**: a DeepSeek CLI agent that drives the tools to reverse a module on its own.
+- **Codex plugin** (`hex-viewer`): an interactive hex viewer for compatible Codex clients, plus 24 analysis tools.
+- **MCP server**: 25 tools in total: `view_binary` and the 24 analysis tools. The interactive viewer needs a client that supports MCP Apps; other clients can use the text tools.
 - **`deepseek-bin`**: a standalone CLI agent that uses the same tools with DeepSeek models.
 
 ![Hex Viewer showing a file with a search hit and the byte inspector](docs/screenshot.jpg)
@@ -14,21 +13,21 @@ A reverse-engineering toolkit for stripped Nintendo Switch modules (and any bina
 | Tool | What it does |
 | --- | --- |
 | `view_binary` | Interactive hex + ASCII viewer (Codex UI): go to offset, hex/text search, byte inspector |
-| `file_info` | Identify the file and its structure. NSO/NRO: segments, build id, module path, symbols. NSP/XCI: contained files |
-| `disassemble` | AArch64 (or x86-64) disassembly by address or symbol, annotated with call targets, labels and resolved `ADRP`+`ADD`/`LDR` data refs with string previews |
-| `list_functions` | Recover function boundaries in stripped code (call targets + relocations + init arrays + prologue scan) — the missing symbol table |
-| `call_graph` | Callees/callers of a function as a depth-limited tree (recursion marked) |
-| `scan_syscalls` | Decode every `svc #n` into its Horizon kernel call (`SendSyncRequest`, `QueryMemory`, …), grouped |
-| `label_syscalls` | Auto-name every `nn::svc` wrapper (`svcSleepThread`, …) and comment each site; names then flow into disassembly, `list_functions` and `call_graph` |
-| `find_services` | Find Switch IPC service names in rodata (`fsp-srv`, `set:sys`, `nifm:u`, …) and the functions that use each, by reference count |
-| `label_services` | Label referencing functions `use_<service>` and comment the service strings, as persistent annotations |
-| `label_from_strings` | Name functions from diagnostic strings — a trace/assert like `"RoModule::RelocateRel is called"` names the one function that logs it |
-| `parse_npdm` | Parse `main.npdm`: program id, and the authoritative Service Access Control (which services a module **hosts** vs **connects to**) + kernel syscall allowlist |
-| `find_rtti` | Recover C++ class names from Itanium RTTI — demangled `type_info` names, each class's vtable and virtual-method count |
-| `label_rtti` | Name every vtable (`vtable_<Class>`) and virtual method (`<Class>::vf<n>`) from RTTI, as persistent annotations — a large name-recovery pass |
-| `export_symbols` | Export all recovered names (functions, RTTI vtables, syscall/service labels, comments) as **Ghidra** and **IDA** import scripts; pair with `extract_image` to carry the whole analysis into a disassembler |
-| `find_xrefs` | Calls, branches and data refs to an address, with the enclosing function |
-| `find_string_refs` | Strings matching text → the code that uses them (fastest way into unknown code) |
+| `file_info` | Identify format signatures; summarize NSO/NRO segments and symbols, NPDM declarations, or NSP/XCI container entries |
+| `disassemble` | AArch64 disassembly with branch/data-reference annotations; x86-64 instruction disassembly is also available with `arch: "x86-64"` |
+| `list_functions` | Estimate function boundaries from AArch64 call targets, relocations, init arrays and prologues |
+| `call_graph` | Display detected direct AArch64 calls as a depth-limited tree; inferred boundaries and indirect calls can leave gaps |
+| `scan_syscalls` | Find `svc #n` encodings in the text segment and label known Horizon syscall numbers; presence does not establish execution |
+| `label_syscalls` | Label detected small functions with a single known syscall as candidate wrappers, and annotate SVC sites |
+| `find_services` | Find known-looking Switch IPC service strings and detected references to them; references do not prove service use or ownership |
+| `label_services` | Add `use_<service>` labels to eligible unnamed functions referencing one detected service, and annotate the strings |
+| `label_from_strings` | Infer labels from diagnostic strings, such as the synthetic `"FixtureWorker::Run is called"`, when exactly one detected unnamed function references the string |
+| `parse_npdm` | Read the program id, service declarations and syscall allowlist from NPDM ACI0; does not verify ACID signatures or actual runtime activity |
+| `find_rtti` | Find candidate Itanium C++ RTTI names, vtables and method-slot counts from available metadata and relocations |
+| `label_rtti` | Save inferred vtable labels and `<Class>::vf<n>` labels for detected method targets; these are not recovered original method names |
+| `export_symbols` | Export collected function labels, vtable labels and comments as **Ghidra**/**IDA** import scripts or JSON |
+| `find_xrefs` | Detect supported AArch64 calls, branches and data references to an address |
+| `find_string_refs` | Find matching strings and supported AArch64 references to them |
 | `list_symbols` | Demangled dynsym symbols and your saved labels |
 | `search_bytes` | Hex patterns with `??` wildcards, or `"text"` |
 | `decode_struct` | Decode memory with a C-like layout: `u32 magic; f32 pos[3]; char name[16]; ptr next` |
@@ -38,69 +37,93 @@ A reverse-engineering toolkit for stripped Nintendo Switch modules (and any bina
 | `annotate` / `get_annotations` | Labels, comments and notes, saved per build id in `~/.binharness/` and shown in later disassembly |
 | `extract_image` | Write the decompressed NSO/NRO image + JSON symbol map for Ghidra/IDA |
 
-**Hand-off to Ghidra/IDA.** `extract_image main out.bin` writes the decompressed image; `export_symbols main --out out` writes `out.ghidra.py` / `out.ida.py`. Load `out.bin` as a flat AArch64 binary at base `0x7100000000`, run the script, and every recovered function, vtable, syscall wrapper and service label is applied.
+### Hand-off to Ghidra/IDA
 
-Stripped Switch sysmodules (no symbol table, statically-linked SDK) are the main target: `list_functions` reconstructs the function layout, `scan_syscalls` shows the kernel interface, and `find_string_refs` gets you from an error message to the code. `extract_image` hands the rest off to Ghidra/IDA.
+`extract_image` and `export_symbols` are tool names, not shell executables. Ask your MCP client to call them with these arguments, replacing the paths:
 
-**Formats.** Switch: NSO (LZ4 segments), NRO, NSP/PFS0, XCI/HFS0, NPDM, SARC, BNTX, BFRES, BFSTM, MSBT, BYML, AAMP. Also ELF, Mach-O, PE, PNG/JPEG/GIF, ZIP/gzip/7z/zstd, SQLite, wasm, GameCube/Wii (DOL, REL, Yaz0, RARC, disc images). NSO/NRO addresses use base `0x7100000000` by default (override with `base`).
-
-NCA files are encrypted. This toolkit does not decrypt them or handle console keys, so give it NSO/NRO files you've already extracted (for example `exefs/main`).
-
-## Codex plugin
-
-```bash
-codex plugin marketplace add dougchansan/binharness
-codex plugin add hex-viewer@dougchansan
+```json
+{"name":"extract_image","arguments":{"path":"/path/to/main","out":"/path/to/out.bin"}}
 ```
 
-Restart Codex, then try *"Show `exefs/main` in the hex viewer"* or *"Find the function that prints the save-data error in main.nso"*.
+```json
+{"name":"export_symbols","arguments":{"path":"/path/to/main","out":"/path/to/out","format":"both"}}
+```
+
+Load `out.bin` as a flat AArch64 binary at the base recorded in `out.bin.json` (default `0x7100000000`), then run the generated `out.ghidra.py` or `out.ida.py`. Review labels and import warnings in the destination tool. Function boundaries and labels are analysis hypotheses; indirect calls, missing relocations, optimized code and absent RTTI can reduce coverage.
+
+### Format support and limits
+
+| Level | Formats and behavior |
+| --- | --- |
+| Structured executable analysis | NSO with LZ4 segments; NRO; available segment/symbol metadata and Switch AArch64 analysis heuristics |
+| Structured container/metadata reads | NSP/PFS0, XCI/HFS0 directory entries; NPDM ACI0 program/service/kernel declarations |
+| Identification plus raw-byte tools | ELF, Mach-O, PE, image/archive formats, SQLite, wasm, Nintendo asset signatures, and GameCube/Wii file/image signatures; detection does not imply a format-specific loader, extractor or decoder |
+
+Non-NSO/NRO inputs are treated as flat byte images for disassembly. ELF/Mach-O/PE sections and their load addresses are not mapped automatically. AArch64 reference/function analysis does not extend to x86-64 merely by selecting that disassembler. NSO/NRO addresses default to `0x7100000000`; override with `base` when needed.
+
+NPDM results describe ACI0 declarations. The parser does not verify the ACID signature or establish effective authorization after loader/platform checks. An allowed service or syscall need not be used, and a referenced service string does not identify its provider.
+
+Encrypted NCA files can be identified and inspected as raw bytes, but this toolkit does not decrypt them, acquire console keys or extract files from encrypted NCAs. Supply an NSO/NRO you are authorized to analyze. See [provenance and distribution boundaries](PROVENANCE.md).
+
+## Requirements and MCP setup
+
+The code targets Node.js 18+ and has no npm dependencies. Disassembly requires an LLVM-compatible executable named `objdump` on the process `PATH`, supporting `--triple`, `--no-show-raw-insn` and `--print-imm-hex`. GNU `objdump` is not a drop-in replacement for these arguments. If your installation names the LLVM binary `llvm-objdump`, expose it as `objdump` with an executable wrapper or symlink; a shell alias does not affect Node's `spawnSync`. Symbol and RTTI demangling also need `c++filt` with `-n` and `-t` support. Raw hex inspection does not need these executables.
+
+For a checkout, configure your MCP client's stdio server command as:
+
+```text
+command: node
+args: ["/absolute/path/to/binharness/plugins/hex-viewer/server.mjs"]
+```
+
+`package.json` defines `binharness-mcp` and `deepseek-bin` executables for a packaged install. This is not a claim that the package is currently published on npm; the checkout/local-node command above is the documented setup. `server.json` is draft registry publication metadata, without a verified registry launch recipe. The repository also contains a Codex marketplace manifest at `.agents/plugins/marketplace.json` and the `hex-viewer` plugin under `plugins/hex-viewer`; use the installation flow supported by your Codex version. Client configuration keys and installation commands vary by client/version.
+
+Once connected, try *"Show my synthetic fixture in the hex viewer"* or *"Find references to the fixture's greeting string"*.
 
 ## deepseek-bin (DeepSeek CLI agent)
 
 ```bash
-git clone https://github.com/dougchansan/binharness && cd binharness
-export DEEPSEEK_API_KEY=sk-...        # https://platform.deepseek.com
-node harness/deepseek-bin.mjs exefs/main
+git clone https://github.com/dougchansan/binharness
+cd binharness
+node tests/make-fixture.mjs
+export DEEPSEEK_API_KEY=your-api-key
+node harness/deepseek-bin.mjs tests/fixture.nso
 ```
 
-Interactive session with streaming output, tool-call trace and a running cost line. One-shot mode:
+This starts an interactive session with streaming output and a tool-call trace. It sends prompts and selected tool results to the configured model API; the default endpoint is `https://api.deepseek.com`. One-shot mode using the synthetic fixture:
 
 ```bash
-node harness/deepseek-bin.mjs -p "Find where the game loads its save file and reconstruct that function in C" exefs/main
+node harness/deepseek-bin.mjs -p "Explain the fixture's greeting-string references and cite the addresses" tests/fixture.nso
 ```
 
-**Recon.** On a stripped module, run the naming passes up front so the agent starts from a named module instead of raw `sub_…`:
+**Recon.** Run local metadata and naming passes before the model's analysis:
 
 ```bash
-node harness/deepseek-bin.mjs --recon -p "what does this module do?" exefs/main
+node harness/deepseek-bin.mjs --recon -p "What does this synthetic module do?" tests/fixture.nso
 ```
 
-`--recon` (or `/recon <file>` in the REPL) runs `parse_npdm`, `label_rtti`, `label_syscalls` and `label_services` directly — no model tokens — then hands the agent the summary. RTTI alone typically names hundreds to >1000 functions, and the labels persist, so later sessions start oriented too.
+Recon runs `file_info`, `label_rtti`, `label_syscalls`, `label_services`, `label_from_strings` and a named `list_functions` summary. It also runs `parse_npdm` when the input filename is `main` and a sibling `main.npdm` exists. These passes make no model request themselves; their summaries enter the next API request and contribute to its input tokens. Saved labels persist, and their coverage depends on the input.
+
+The current `--recon` file filter selects NSO and ELF signatures, not NRO. Use `/recon <file>` in the REPL for an NRO. ELF is treated as raw bytes rather than a mapped ELF image, so the advanced passes may fail or produce misleading results on it; NSO/NRO are the intended targets for these passes.
 
 | Option | |
 | --- | --- |
-| `-m deepseek-flash` / `--pro` | Model: `deepseek-flash` (default, cheapest) or `deepseek-v4-pro` |
+| `-m <model>` / `--pro` | Configured model; this code defaults to `deepseek-flash`, and `--pro` selects `deepseek-v4-pro`. Availability depends on the endpoint |
 | `-e none\|low\|high\|max` | Thinking effort (`none` disables thinking) |
 | `--show-thinking` | Stream the model's reasoning |
 | `--max-steps N` | Tool rounds per task (default 60) |
+| `--base-url <url>` | Model API base URL; also configurable with `DEEPSEEK_BASE_URL` |
 | `-y` | Allow `extract_image` to write files without asking |
 
-REPL commands: `/model`, `/effort`, `/add <file>`, `/files`, `/cost`, `/save notes.md`, `/reset`, `/exit`. Ctrl-C interrupts the current turn.
+REPL commands: `/help`, `/recon <file>`, `/model`, `/effort`, `/add <file>`, `/files`, `/cost`, `/save notes.md`, `/reset`, `/exit`. Ctrl-C interrupts the current turn. The CLI's confirmation currently covers `extract_image` only; annotation/label tools, `export_symbols` and `/save` can write without that prompt.
 
-**Why it's cheap:** the conversation is append-only, so DeepSeek's prompt cache covers almost every request (cache hits cost ~2% of misses). Tool outputs are capped, and the agent is told to make small, targeted calls. Annotations persist, so the next session starts from what earlier ones learned instead of re-deriving it. Session transcripts are written to `~/.binharness/sessions/`.
+**Usage and estimates.** Tool results sent to the model are capped at 16,000 characters per call, and the prompt asks for targeted reads. The conversation history is resent with each request. Cache use and billing depend on the provider; neither cache coverage nor savings is guaranteed. `/cost` uses provider-reported token counts and the hardcoded `PRICES` table in `harness/deepseek-bin.mjs`; its dollar amount is an estimate, not a current price quote or spending limit. Unknown models fall back to the built-in default model's rates.
 
-### Using the tools from other agents
+### Data flow and generated outputs
 
-The MCP server works with any MCP client. For [opencode](https://opencode.ai) with DeepSeek:
+The standalone agent includes requested disassembly, strings, byte excerpts, paths and annotations in model requests as they enter the conversation. Using a local binary does not keep those extracts local. A custom API endpoint receives the same request content; choose a provider and inputs appropriate for the rights and confidentiality requirements of your work. The MCP server itself runs local tools, while the connected client's data-handling policy determines where its tool results go.
 
-```json
-{
-  "model": "deepseek/deepseek-flash",
-  "mcp": {
-    "binharness": { "type": "local", "command": ["node", "/path/to/binharness/plugins/hex-viewer/server.mjs"] }
-  }
-}
-```
+Annotations are stored under `~/.binharness/`. Session JSONL logs contain prompts, model replies and tool-call metadata; `/save` also exports the conversation's tool results. `extract_image` writes the input's decompressed bytes. Model-generated C/C++, annotations and export scripts can contain information derived from the input; generating them does not establish independent provenance or redistribution rights. Review outputs before publishing. See [PROVENANCE.md](PROVENANCE.md) and the [distribution audit](docs/distribution-audit.md).
 
 ## Layout
 
@@ -109,15 +132,27 @@ The MCP server works with any MCP client. For [opencode](https://opencode.ai) wi
 plugins/hex-viewer/
   .codex-plugin/plugin.json          plugin manifest
   .mcp.json, server.mjs              stdio MCP server + view_binary UI wiring
-  lib/bintools.mjs                   the toolkit (formats, LZ4, AArch64 xrefs, objdump wrapper)
+  lib/bintools.mjs                   format handling, LZ4, tool dispatch, objdump wrapper
+  lib/core.mjs, lib/re.mjs           reference decoding and analysis heuristics
   assets/app.html                    hex viewer UI (MCP App)
   skills/hex-viewer/SKILL.md         tells Codex when/how to use the tools
 harness/deepseek-bin.mjs             DeepSeek agent
+harness/fw-index.mjs                local module-directory index and declaration reports
 tests/                               synthetic NSO fixture, mock DeepSeek API, test suite
 ```
 
-Requires Node 18+ and `objdump` (bundled with macOS Command Line Tools; on Linux install `llvm` for `llvm-objdump` and symlink or alias it as `objdump`). No npm dependencies. Run `npm test` to check your setup.
+## Validation and distribution audit
+
+Run the synthetic test suite and distribution checks from a checkout:
+
+```bash
+npm test
+npm run audit:dist
+npm run audit:history
+```
+
+The audit commands check the surfaces documented in [docs/distribution-audit.md](docs/distribution-audit.md). They help detect packaging mistakes; they do not prove ownership, establish input provenance or grant permission to redistribute an artifact.
 
 ## License
 
-MIT
+MIT for the repository's own code. Input binaries and generated artifacts remain subject to their applicable rights; see [PROVENANCE.md](PROVENANCE.md).

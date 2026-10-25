@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // fw-index: build and query a firmware-wide index of Switch system modules.
-// Scans every CodeFS `main` NSO under a dump directory, records build id,
-// sizes, segment layout and all printable strings, and lets you grep across
-// the whole firmware (string -> which title(s) and addresses).
+// Scans immediate child directories containing a `main` image, recording build
+// id, sizes, segments and bounded rodata/data strings. Search covers this local
+// index, not necessarily every module or string in a firmware installation.
 //
 //   node harness/fw-index.mjs build <dumps-dir> [index.json]
 //   node harness/fw-index.mjs search <index.json> <regex>   # which modules contain a string
@@ -74,16 +74,12 @@ function report(index) {
   return lines.join("\n");
 }
 
-// Invert services -> which modules reference them. This is reference-based:
-// a module referencing a service name either registers (serves) or connects to
-// (consumes) it, and the two look the same from the name string alone. So this
-// is a "who touches this service" map, not a proven provider/consumer split.
-// For a service only one module references, that module is almost certainly its
-// server; widely-referenced services (sm:, fsp-srv) are owned elsewhere and the
-// counts just reflect how heavily each caller uses them.
+// Group literal NPDM ACI0 service entries by declared host/connect permission.
+// These declarations are not a runtime dependency map. The parser does not
+// verify ACID signatures, establish effective authorization or expand wildcards.
 function servicesReport(index) {
   const withNpdm = index.modules.filter((m) => m.npdm && m.npdm.services);
-  // Authoritative map from NPDM Service Access Control: who hosts vs connects.
+  // Keep the existing index field names; host/client sets represent declarations.
   const map = new Map(); // service -> {hosts:Set, clients:Set}
   const label = (m) => (m.npdm && m.npdm.name) || m.title.slice(-8);
   for (const m of withNpdm) for (const s of m.npdm.services) {
@@ -92,13 +88,13 @@ function servicesReport(index) {
   }
   const rows = [...map.entries()].map(([name, e]) => ({ name, hosts: [...e.hosts], clients: [...e.clients] }))
     .sort((a, b) => b.clients.length - a.clients.length || a.name.localeCompare(b.name));
-  const lines = [`# Switch firmware IPC service map`, ``, `- Source: \`${index.dir}\``,
-    `- Modules with NPDM: **${withNpdm.length}**  ·  distinct services: **${map.size}**`, ``,
-    `Authoritative, from each module's NPDM Service Access Control (ground truth, not reference-guessing): **hosts** = the module registers/implements the service; **clients** = modules permitted to connect.`, ``,
-    `## Most-depended-on services`, ``, `| Service | Hosted by | Clients |`, `| --- | --- | --- |`];
-  for (const r of rows.slice(0, 50)) lines.push(`| \`${r.name}\` | ${r.hosts.join(", ") || "**?** (host not in dump)"} | ${r.clients.length} |`);
+  const lines = [`# Switch firmware IPC service declarations`, ``, `- Source: \`${index.dir}\``,
+    `- Modules with parsed NPDM: **${withNpdm.length}**  ·  distinct service entries: **${map.size}**`, ``,
+    `Entries come from NPDM ACI0 service declarations: **host** and **connect** describe requested permissions. They do not establish actual registration, use or effective authorization. ACID signatures are not verified, wildcard entries are not expanded, and absent modules can leave this index incomplete.`, ``,
+    `## Entries with the most declared connecting modules`, ``, `| Service entry | Modules declaring host permission | Modules declaring connect permission |`, `| --- | --- | --- |`];
+  for (const r of rows.slice(0, 50)) lines.push(`| \`${r.name}\` | ${r.hosts.join(", ") || "**?** (no matching host declaration in index)"} | ${r.clients.length} |`);
   const orphanHosts = rows.filter((r) => r.hosts.length === 0);
-  if (orphanHosts.length) lines.push(``, `## Services with clients but no host in this dump (${orphanHosts.length})`, ``,
+  if (orphanHosts.length) lines.push(``, `## Connect entries without a matching host declaration in this index (${orphanHosts.length})`, ``,
     orphanHosts.map((r) => `\`${r.name}\``).join(" "));
   return lines.join("\n");
 }

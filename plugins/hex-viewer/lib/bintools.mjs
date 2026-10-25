@@ -451,7 +451,7 @@ const ADDR = { type: "string", description: "Virtual address (hex string like \"
 const BASE = { type: "string", description: "Override load base address (default 0x7100000000 for NSO/NRO, 0 for raw files)." };
 
 export const TOOLS = [
-  { name: "file_info", description: "Identify a file and summarize its structure. For Switch NSO/NRO: segments, build id, module path, symbol counts. For NSP/XCI/PFS0/HFS0: contained files. Start here.",
+  { name: "file_info", description: "Identify format signatures and summarize supported structures. NSO/NRO: segments and available symbol metadata. NSP/XCI/PFS0/HFS0: container entries. NPDM: ACI0 declarations without ACID signature verification. Other detected formats receive a raw header preview, not a format-specific loader. Start here.",
     inputSchema: { type: "object", properties: { path: P, base: BASE }, required: ["path"] } },
   { name: "read_binary_chunk", description: "Read bytes as a hexdump (or base64). Use `offset` for raw file offsets, or `address` for NSO/NRO virtual addresses (decompressed image). Max 64 KiB.",
     inputSchema: { type: "object", properties: { path: P, offset: { type: "integer", minimum: 0 }, address: ADDR, length: { type: "integer", minimum: 1, maximum: MAX_CHUNK, default: 256 }, format: { type: "string", enum: ["hex", "base64"], default: "hex" }, base: BASE }, required: ["path"] } },
@@ -459,11 +459,11 @@ export const TOOLS = [
     inputSchema: { type: "object", properties: { path: P, segment: { type: "string", description: "text | rodata | data | file (default: rodata for executables, whole file otherwise)" }, filter: { type: "string" }, min_length: { type: "integer", minimum: 2, default: 4 }, max_results: { type: "integer", minimum: 1, maximum: 5000, default: 200 }, base: BASE }, required: ["path"] } },
   { name: "search_bytes", description: "Search for a byte pattern. Hex with ?? wildcards (\"1f 20 03 d5 ?? ?? 00 94\") or quoted text (\"\\\"Error\\\"\"). Searches the decompressed image for NSO/NRO.",
     inputSchema: { type: "object", properties: { path: P, pattern: { type: "string" }, segment: { type: "string" }, max_results: { type: "integer", minimum: 1, maximum: 1000, default: 50 }, base: BASE }, required: ["path", "pattern"] } },
-  { name: "disassemble", description: "Disassemble instructions at an address (AArch64 default; x86-64 available). Output is annotated with symbol/label names for branch targets and resolved ADRP+ADD/LDR data references, including string previews.",
+  { name: "disassemble", description: "Disassemble instructions at an address (AArch64 default; x86-64 available). AArch64 output includes detected branch/data references with labels and string previews; that reference analysis is not provided for x86-64. NSO/NRO are mapped; other inputs are flat bytes without automatic ELF/Mach-O/PE section loading.",
     inputSchema: { type: "object", properties: { path: P, address: ADDR, symbol: { type: "string", description: "Symbol or label name to start at instead of address (substring match)." }, count: { type: "integer", minimum: 1, maximum: 2000, default: 64 }, arch: { type: "string", enum: ["aarch64", "x86-64"] }, base: BASE }, required: ["path"] } },
-  { name: "find_xrefs", description: "Find code that references an address: calls (BL), branches, and ADRP-based data loads/stores/address computations. Returns referencing instruction addresses and enclosing function names.",
+  { name: "find_xrefs", description: "Detect supported AArch64 references to an address: direct calls/branches and tracked ADRP-based data references. Reports instruction addresses with available symbol/label context. Does not resolve all indirect or computed references and is not a runtime trace.",
     inputSchema: { type: "object", properties: { path: P, address: ADDR, max_results: { type: "integer", minimum: 1, maximum: 2000, default: 100 }, base: BASE }, required: ["path", "address"] } },
-  { name: "find_string_refs", description: "Find strings matching `text` (case-insensitive substring) in the image, then find the code that references each one. Great for locating functions by their log/error messages.",
+  { name: "find_string_refs", description: "Find strings matching `text` (case-insensitive substring), then detect supported AArch64 references to them. Useful for locating candidate functions from log/error strings; references can be incomplete and do not establish runtime use.",
     inputSchema: { type: "object", properties: { path: P, text: { type: "string" }, max_strings: { type: "integer", minimum: 1, maximum: 100, default: 10 }, base: BASE }, required: ["path", "text"] } },
   { name: "list_symbols", description: "List symbols (dynsym, demangled) and your saved labels. Filter with a case-insensitive regex.",
     inputSchema: { type: "object", properties: { path: P, filter: { type: "string" }, kind: { type: "string", enum: ["all", "func", "object", "imported", "labels"], default: "all" }, limit: { type: "integer", minimum: 1, maximum: 5000, default: 200 }, base: BASE }, required: ["path"] } },
@@ -475,47 +475,50 @@ export const TOOLS = [
     inputSchema: { type: "object", properties: { path: P, address: ADDR, label: { type: "string" }, comment: { type: "string" }, notes: { type: "string", description: "Replace the free-form project notes for this binary." }, base: BASE }, required: ["path"] } },
   { name: "get_annotations", description: "Return saved labels, comments and notes for this binary.",
     inputSchema: { type: "object", properties: { path: P, base: BASE }, required: ["path"] } },
-  { name: "extract_image", description: "Write the decompressed NSO/NRO memory image to `out` as a flat binary (load it at the base address in Ghidra/IDA), plus a .json sidecar with segments and symbols. Will not overwrite existing files.",
+  { name: "extract_image", description: "Write the input's decompressed NSO/NRO image to `out` as a flat binary, plus an `out.json` sidecar with segments and symbols for Ghidra/IDA. Refuses an existing binary output path; an existing sidecar can be replaced. The exported bytes remain derived from the input.",
     inputSchema: { type: "object", properties: { path: P, out: { type: "string" }, base: BASE }, required: ["path", "out"] } },
 ];
 TOOLS.push(...RE_TOOLS);
 TOOLS.push({
   name: "label_syscalls",
-  description: "Auto-name every nn::svc wrapper function (svcSleepThread, svcSendSyncRequest, …) and comment each `svc #n` site with its Horizon syscall name. Saves them as persistent annotations, so the names then appear in disassemble, list_functions and call_graph. Run this once on a fresh module.",
+  description: "Label detected small AArch64 functions containing one known syscall as candidate svc wrappers, and annotate detected `svc #n` sites. Saves inferred labels/comments without replacing existing ones. A label does not establish original SDK identity or runtime execution; use dry_run to preview.",
   inputSchema: { type: "object", properties: { path: { type: "string" }, base: { type: "string" }, dry_run: { type: "boolean", description: "Preview without saving." } }, required: ["path"] },
   annotations: { readOnlyHint: false },
 });
 TOOLS.push({
   name: "export_symbols",
-  description: "Export everything recovered (function boundaries + names, RTTI vtables, svc/service labels, saved labels and comments) as Ghidra and/or IDA import scripts, so the names carry into a full disassembler. Runs the RTTI/syscall/service naming passes first by default (set label:false to export only what's already labeled). Pair with extract_image: load the image at the base address, then run the script. format: ghidra | ida | both (default) | json.",
+  description: "Export collected function labels, RTTI/vtable labels and comments as Ghidra/IDA import scripts or JSON. Runs RTTI/syscall/service labeling first by default (label:false skips those saving passes). Review inferred labels and destination import warnings. Pair with extract_image; load the image at its recorded base. format: ghidra | ida | both (default) | json.",
   inputSchema: { type: "object", properties: { path: { type: "string" }, out: { type: "string", description: "Output path prefix (e.g. ./ngc). Suffixes .ghidra.py/.ida.py/.names.json are added." }, format: { type: "string", enum: ["ghidra", "ida", "both", "json"], default: "both" }, label: { type: "boolean", description: "Run RTTI/syscall/service labeling first (default true)." }, base: { type: "string" } }, required: ["path", "out"] },
   annotations: { readOnlyHint: false },
 });
 TOOLS.push({
   name: "label_rtti",
-  description: "Name every recovered vtable (vtable_<Class>) and its virtual-method functions (<Class>::vf<n>) from C++ RTTI, as persistent annotations. One of the biggest name-recovery passes for a stripped C++ module; run after find_rtti looks right.",
+  description: "Save inferred labels for detected RTTI vtables (vtable_<Class>) and method targets (<Class>::vf<n>), preserving existing labels. Coverage depends on recognized metadata/relocations. Slot-based method labels are not original method names. Inspect find_rtti or use dry_run before relying on them.",
   inputSchema: { type: "object", properties: { path: { type: "string" }, base: { type: "string" }, dry_run: { type: "boolean" } }, required: ["path"] },
   annotations: { readOnlyHint: false },
 });
 TOOLS.push({
   name: "label_from_strings",
-  description: "Name functions from diagnostic strings: trace/assert messages often embed the C++ qualified name of the function that logs them (e.g. \"RoModule::RelocateRel is called\"). When exactly one unnamed function references such a string, label it with that name. Persistent annotations.",
+  description: "Infer labels from qualified names in diagnostic strings, such as the synthetic \"FixtureWorker::Run is called\". Save a candidate when exactly one detected function references the string and the target is unnamed. The string may describe another function; verify the inference. Use dry_run to preview.",
   inputSchema: { type: "object", properties: { path: { type: "string" }, base: { type: "string" }, dry_run: { type: "boolean" } }, required: ["path"] },
   annotations: { readOnlyHint: false },
 });
 TOOLS.push({
   name: "parse_npdm",
-  description: "Parse a main.npdm (Switch program metadata): program id, 32/64-bit, and the authoritative Service Access Control — which services the module may HOST (register) vs CONNECT to — plus the kernel syscall allowlist. If a sibling `main` NSO exists, cross-checks the syscalls the code actually issues against the allowlist. This is ground truth, unlike find_services/scan_syscalls.",
+  description: "Read main.npdm ACI0 program/service/kernel declarations: program id, 32/64-bit, declared host/connect permissions and syscall allowlist. Does not verify ACID signatures or effective authorization. If a sibling main image exists, compare statically detected SVC numbers with the allowlist; their presence does not establish execution.",
   inputSchema: { type: "object", properties: { path: { type: "string", description: "Path to the .npdm file." } }, required: ["path"] },
   annotations: { readOnlyHint: true },
 });
 TOOLS.push({
   name: "label_services",
-  description: "Label the functions that reference each IPC service as use_<service> (e.g. use_fsp_srv) and comment the service-name strings. Saved as persistent annotations so names appear in disassemble, list_functions and call_graph.",
+  description: "Save use_<service> labels for eligible unnamed functions referencing exactly one detected service string, and annotate the strings. These are heuristic reference labels, not proof that the function connects to or provides the service. Existing labels/comments are preserved; use dry_run to preview.",
   inputSchema: { type: "object", properties: { path: { type: "string" }, base: { type: "string" }, dry_run: { type: "boolean" } }, required: ["path"] },
   annotations: { readOnlyHint: false },
 });
-for (const t of TOOLS) t.annotations = { readOnlyHint: !["annotate", "extract_image"].includes(t.name) };
+for (const t of TOOLS) t.annotations = {
+  ...t.annotations,
+  readOnlyHint: t.annotations?.readOnlyHint ?? !["annotate", "extract_image"].includes(t.name),
+};
 
 function segData(img, name) {
   if (!name || name === "file" || name === "all") return { data: img.data, start: 0 };
@@ -577,7 +580,7 @@ export function callTool(name, args = {}) {
       const f = img.symbols.filter((s) => !s.imported).length;
       lines.push(`symbols: ${img.symbols.length} (${f} defined, ${img.symbols.length - f} imported); labels: ${img.sortedNamed.length - new Set(img.symbols.filter((s) => s.addr).map((s) => s.addr)).size} saved`);
     } else if (/NPDM/.test(format || "")) {
-      try { const n = parseNpdm(readRange(file, 0, head.size).buf); lines.push(`${n.name}  ${n.programId}  ${n.is64Bit ? "64-bit" : "32-bit"}`, `hosts: ${n.services.filter((x) => x.host).map((x) => x.name).join(" ") || "—"}`, `connects to: ${n.services.filter((x) => !x.host).map((x) => x.name).join(" ") || "—"}`); } catch (e) { lines.push("(NPDM parse failed: " + e.message + ")"); }
+      try { const n = parseNpdm(readRange(file, 0, head.size).buf); lines.push(`${n.name}  ${n.programId}  ${n.is64Bit ? "64-bit" : "32-bit"}`, `ACI0 declared host permissions: ${n.services.filter((x) => x.host).map((x) => x.name).join(" ") || "—"}`, `ACI0 declared connect permissions: ${n.services.filter((x) => !x.host).map((x) => x.name).join(" ") || "—"}`, "ACID signatures and effective authorization are not verified; declarations do not establish runtime use."); } catch (e) { lines.push("(NPDM parse failed: " + e.message + ")"); }
     } else if (/PFS0|HFS0/.test(format || "")) {
       const p = parsePfs0(file);
       lines.push(...p.files.map((f) => `  ${f.name}  @${hex(f.offset)}  ${f.size} bytes`));

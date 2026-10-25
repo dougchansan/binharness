@@ -3,15 +3,16 @@ name: hex-viewer
 description: Use when the user wants to view, inspect, or reverse engineer a binary file (Switch NSO/NRO/NSP/XCI, executables, object files, ROM/ISO data, game assets, .bin/.dol/.rel) or when a file preview says binary files aren't supported.
 ---
 
-- **Show the user a file**: `view_binary` opens the interactive hex viewer (it pages through the file itself; don't re-call it to scroll).
-- **Get your bearings**: `file_info` first. For NSO/NRO it reports segments, build id, module path and symbol counts; for NSP/XCI it lists contained files. NCA files are encrypted and unsupported; ask for extracted NSO/NRO.
-- **Find code**: `find_string_refs` (log/error strings → the functions that use them), `list_symbols` (demangled dynsym + saved labels), `search_bytes` (hex with `??` wildcards).
-- **Map the code** (stripped modules): `list_functions` reconstructs function boundaries, `call_graph` shows callers/callees, `scan_syscalls` decodes `svc #n` into Horizon kernel calls, `find_services` lists the IPC services (fsp-srv, set:sys, …) a module uses.
-- **Recover names** (the big wins): `find_rtti`/`label_rtti` demangle C++ class names and name every vtable and virtual method; `label_syscalls` names the `svc` wrappers; `label_services` labels service users. All save annotations that then show everywhere. Run `label_rtti` early — it names the most.
-- **Authoritative metadata**: `parse_npdm` on the sibling `main.npdm` gives the program id and which services the module may host vs connect to (ground truth, unlike `find_services`).
-- **Read code**: `disassemble` by address or symbol name; output annotates call targets and ADRP+ADD/LDR data refs with string previews. Follow callers with `find_xrefs`.
-- **Data**: `decode_struct` with a C-like layout, `read_binary_chunk` for raw bytes (`address` for NSO/NRO virtual addresses, `offset` for file offsets).
-- **Remember**: `annotate` labels/comments/notes as soon as you understand something; they persist per build id and show up in later disassembly. `get_annotations` to review.
-- **Hand off to Ghidra/IDA**: `extract_image` writes the flat decompressed image; `export_symbols` writes Ghidra/IDA import scripts that apply every recovered function name, vtable, syscall wrapper and service label. Load the image at the base, run the script.
+- **Show a file**: Call `view_binary` in a client supporting MCP Apps. Let the viewer page through the file; do not re-call it to scroll.
+- **Get your bearings**: Start with `file_info`. Use NSO/NRO segments and available symbols, NSP/XCI container listings, or NPDM declarations. Treat other recognized formats as raw bytes unless a structured reader is documented. For encrypted NCA analysis, request an NSO/NRO the user is authorized to analyze; this toolkit provides no decryption or console keys.
+- **Find code**: Use `find_string_refs` for matching strings and detected AArch64 references, `list_symbols` for dynsym/saved labels, and `search_bytes` for hex patterns with `??` wildcards.
+- **Map stripped modules**: Use `list_functions` for estimated boundaries and `call_graph` for detected direct AArch64 calls. Treat `scan_syscalls` as instruction presence and `find_services` as service-string references, not evidence of runtime activity or service ownership.
+- **Infer names**: Inspect `find_rtti` before saving candidate RTTI labels with `label_rtti`. Use `label_syscalls` for candidate wrappers, `label_services` for eligible service-reference labels, and `label_from_strings` for diagnostic-name candidates. These tools save inferred annotations; verify their evidence and do not describe them as complete original symbols.
+- **Read declarations**: Use `parse_npdm` on `main.npdm` to read ACI0 program/service/kernel declarations. State that ACID signatures are not verified, declared permissions are not proof of effective authorization, and allowed services/syscalls need not be used.
+- **Read code**: Use `disassemble` by address or symbol; follow supported AArch64 branch/data references with `find_xrefs`. Use `arch: "x86-64"` for x86-64 instruction disassembly only; the reference/function heuristics remain AArch64-specific.
+- **Read data**: Use `decode_struct` with a C-like layout and `read_binary_chunk` for bytes (`address` for NSO/NRO virtual addresses, `offset` for file offsets).
+- **Record findings**: Save evidence and uncertainty with `annotate`, then review with `get_annotations`. Labels persist under `~/.binharness/` and appear in later analysis.
+- **Export analysis**: Call `extract_image` with `path` and `out`; call `export_symbols` with `path`, an `out` prefix and `format`. These are MCP tools, not shell commands. Load the exported image at its recorded base, run the import script, and review labels/import warnings in Ghidra or IDA.
+- **Preserve provenance**: Treat decompressed images and reconstructed C/C++ as derived from their inputs. Check provenance and rights before publishing outputs. Account for the connected client's handling of tool results; the standalone agent sends extracts to its configured model API.
 
 Addresses are hex strings; NSO/NRO default base is 0x7100000000.
