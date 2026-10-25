@@ -30,13 +30,14 @@ function usage() {
       --base-url <url>   API base (default https://api.deepseek.com)
   -y, --yes              allow file-writing tools without asking
       --show-thinking    print the model's reasoning as it streams
+      --recon            run the naming passes (RTTI/syscalls/services) up front
   -h, --help
 
 env: DEEPSEEK_API_KEY (required), DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
-REPL: /help /model /effort /files /add <file> /cost /save <file.md> /reset /exit`);
+REPL: /help /recon [file] /model /effort /files /add <file> /cost /save <file.md> /reset /exit`);
 }
 
-const opts = { model: process.env.DEEPSEEK_MODEL || "deepseek-flash", effort: "high", maxSteps: 60, baseUrl: process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com", yes: false, showThinking: false, prompt: null, files: [] };
+const opts = { model: process.env.DEEPSEEK_MODEL || "deepseek-flash", effort: "high", maxSteps: 60, baseUrl: process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com", yes: false, showThinking: false, recon: false, prompt: null, files: [] };
 const argv = process.argv.slice(2);
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i], next = () => argv[++i];
@@ -49,6 +50,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === "--base-url") opts.baseUrl = next();
   else if (a === "-y" || a === "--yes") opts.yes = true;
   else if (a === "--show-thinking") opts.showThinking = true;
+  else if (a === "--recon") opts.recon = true;
   else if (a.startsWith("-")) { console.error(`unknown option ${a}`); usage(); process.exit(2); }
   else opts.files.push(resolvePath(a));
 }
@@ -65,17 +67,25 @@ const out = (s) => process.stdout.write(s);
 // ---------- conversation state ----------
 
 const SYSTEM = `You are deepseek-bin, an expert reverse engineer working inside a binary-analysis harness.
-Primary target: Nintendo Switch executables (NSO/NRO; AArch64, little-endian, default base 0x7100000000) and containers (NSP/PFS0, XCI/HFS0). You can also analyze any other file.
+Primary target: Nintendo Switch executables (NSO/NRO; AArch64, little-endian, default base 0x7100000000) and containers (NSP/PFS0, XCI/HFS0). These sysmodules are STRIPPED and statically linked (no symbol table), so you recover structure yourself. You can also analyze any other file.
 
-How to work:
-- Start with file_info on each file. Use list_symbols and find_string_refs to find entry points (log/assert/error strings are the fastest way into unknown code).
-- Read code with disassemble (it annotates call targets, labels, and ADRP+ADD/LDR data refs with string previews). Follow calls with find_xrefs.
-- Use decode_struct for data, search_bytes for signatures (?? wildcards), read_binary_chunk for raw bytes.
-- Record everything you learn with annotate (labels for functions/globals, comments for non-obvious instructions, notes for the big picture). Annotations persist across sessions and appear in later disassembly, so name things as soon as you understand them.
-- Prefer many small, targeted tool calls over huge dumps. Ask for 32-200 instructions at a time.
-- Addresses are virtual addresses as hex strings ("0x7100012340"). Cite addresses in your answers.
-- When reconstructing code, write clear C/C++ with typed structs and explain uncertain parts.
-- NCA files are encrypted; you cannot decrypt them. Ask the user for extracted NSO/NRO files instead.
+RECON FIRST — on a fresh module, before answering anything, establish structure and names in this order (unless the harness already ran /recon, in which case names exist and you can skip straight to the question):
+1. file_info — segments, build id, size.
+2. parse_npdm — if a sibling main.npdm exists: program id, which services the module HOSTS vs connects to, syscall allowlist. This is the module's identity and job in one call.
+3. label_rtti — demangle C++ class names and name every vtable + virtual method. This is the biggest win; do it early so disassembly and the function list come back named.
+4. label_syscalls and label_services — name the svc wrappers and service-using functions.
+5. Now list_functions / find_rtti / scan_syscalls / find_services show real names. Use find_string_refs (log/assert/error strings) to reach specific logic.
+
+Then investigate:
+- disassemble by address or symbol; it annotates call targets, labels, ADRP+ADD/LDR data refs with string previews. Follow callers/callees with call_graph and find_xrefs.
+- decode_struct for data, search_bytes for signatures (?? wildcards), read_binary_chunk for raw bytes.
+- annotate anything you figure out (labels/comments/notes). Annotations persist per build id and appear in later disassembly, so name as you go.
+
+Rules:
+- Prefer many small, targeted calls over huge dumps. Ask for 32-200 instructions at a time.
+- Addresses are virtual-address hex strings ("0x7100012340"). Cite addresses in answers.
+- Reconstruct code as clear C/C++ with typed structs; flag uncertain parts.
+- NCA files are encrypted; you cannot decrypt them. Ask for extracted NSO/NRO instead.
 Be concise in prose; be precise about addresses, types and evidence.`;
 
 const tools = TOOLS.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.inputSchema } }));
@@ -201,6 +211,34 @@ async function runTask(userText) {
   out(yellow(`\n(stopped after ${opts.maxSteps} tool rounds; say "continue" to keep going)\n`));
 }
 
+// Deterministic recon: run the structure + naming passes on a module directly
+// (no model tokens), then inject a summary so the agent starts already oriented.
+function recon(file) {
+  file = resolvePath(file);
+  out(bold(`\nrecon ${path.basename(file)}\n`));
+  const summary = [];
+  const step = (title, name, args) => {
+    const r = safeCallTool(name, { path: file, ...args });
+    const text = r.content.map((x) => x.text).join("\n");
+    const first = text.split("\n").find((l) => l.trim()) || "";
+    out(cyan(`  ${title}`) + dim(`  ${r.isError ? "✗ " + first : first.slice(0, 90)}`) + "\n");
+    if (!r.isError) summary.push(`### ${title}\n${text.length > 1500 ? text.slice(0, 1500) + "\n…" : text}`);
+    return r;
+  };
+  step("file_info", "file_info", {});
+  const npdm = file.replace(/\/main$/, "/main.npdm");
+  if (npdm !== file && fs.existsSync(npdm)) step("parse_npdm", "parse_npdm", { path: npdm });
+  step("label_rtti", "label_rtti", {});
+  step("label_syscalls", "label_syscalls", {});
+  step("label_services", "label_services", {});
+  step("list_functions", "list_functions", { named_only: true, limit: 40 });
+  messages.push(
+    { role: "user", content: `I ran recon on ${file}. Structure and names are already established (RTTI classes, svc wrappers and service users are labeled and persist). Here is the summary; use it instead of re-running these passes:\n\n${summary.join("\n\n")}` },
+    { role: "assistant", content: "Recon received — the module is oriented and named. What would you like me to investigate?" },
+  );
+  out(dim(`  (${summary.length} passes; names saved and shared with the model)\n`));
+}
+
 function costLine() {
   const total = totals.hit + totals.miss;
   return dim(`[${opts.model} · in ${total.toLocaleString()} (${total ? Math.round((100 * totals.hit) / total) : 0}% cached) · out ${totals.out.toLocaleString()} · ≤$${totals.cost.toFixed(4)}]`);
@@ -227,11 +265,20 @@ function ask(q) {
   return new Promise((res) => lineWaiters.push(res));
 }
 
+function looksLikeModule(f) {
+  try { const b = Buffer.alloc(4); const fd = fs.openSync(f, "r"); fs.readSync(fd, b, 0, 4, 0); fs.closeSync(fd);
+    return b.toString("latin1") === "NSO0" || b.toString("latin1", 0, 4) === "\x7fELF"; } catch { return false; }
+}
+
 async function main() {
   const intro = opts.files.length ? `I'm working with these files:${filesNote(opts.files).replace(/^\n\nFiles in this session:/, "")}\nStart by getting your bearings (file_info), then wait for my questions.` : null;
 
+  // --recon (or auto, when a single module is given): run the naming passes up front.
+  const reconTargets = opts.recon ? opts.files.filter(looksLikeModule) : [];
+  if (opts.recon && !reconTargets.length) out(yellow("(--recon: no NSO/ELF module among the files)\n"));
+
   if (opts.prompt) {
-    try { await runTask(opts.prompt + filesNote(opts.files)); }
+    try { for (const f of reconTargets) recon(f); await runTask(opts.prompt + (reconTargets.length ? "" : filesNote(opts.files))); }
     catch (e) { console.error(red(e.message)); process.exitCode = 1; }
     console.error(costLine());
     return;
@@ -242,7 +289,8 @@ async function main() {
   rl.on("close", () => { closed = true; while (lineWaiters.length) lineWaiters.shift()(null); });
   rl.on("SIGINT", () => { if (currentAbort) { currentAbort.abort(); out(yellow("\n(interrupted)\n")); } else rl.close(); });
   console.log(bold("deepseek-bin") + dim(` · ${opts.model} · effort ${opts.effort} · /help for commands · log ${logFile}`));
-  if (intro) await safeTask(intro);
+  for (const f of reconTargets) recon(f);
+  if (intro && !reconTargets.length) await safeTask(intro);
 
   for (;;) {
     const raw = await ask(bold("\n› "));
@@ -281,6 +329,7 @@ async function command(line) {
       messages.push({ role: "user", content: `Added file: ${f}` }, { role: "assistant", content: "Noted." });
       console.log(`added ${f}`); break;
     }
+    case "/recon": { const f = arg ? resolvePath(arg) : opts.files[0]; if (!f) { console.log("usage: /recon <file> (or load a file first)"); break; } recon(f); break; }
     case "/cost": console.log(costLine()); break;
     case "/reset": messages = [{ role: "system", content: SYSTEM }]; console.log("conversation cleared (annotations are kept)"); break;
     case "/save": { const f = resolvePath(arg || "deepseek-bin-session.md"); fs.writeFileSync(f, toMarkdown()); console.log(`saved ${f}`); break; }

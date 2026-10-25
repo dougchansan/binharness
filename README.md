@@ -63,6 +63,14 @@ Interactive session with streaming output, tool-call trace and a running cost li
 node harness/deepseek-bin.mjs -p "Find where the game loads its save file and reconstruct that function in C" exefs/main
 ```
 
+**Recon.** On a stripped module, run the naming passes up front so the agent starts from a named module instead of raw `sub_…`:
+
+```bash
+node harness/deepseek-bin.mjs --recon -p "what does this module do?" exefs/main
+```
+
+`--recon` (or `/recon <file>` in the REPL) runs `parse_npdm`, `label_rtti`, `label_syscalls` and `label_services` directly — no model tokens — then hands the agent the summary. RTTI alone typically names hundreds to >1000 functions, and the labels persist, so later sessions start oriented too.
+
 | Option | |
 | --- | --- |
 | `-m deepseek-flash` / `--pro` | Model: `deepseek-flash` (default, cheapest) or `deepseek-v4-pro` |
