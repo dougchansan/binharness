@@ -34,3 +34,4 @@ FIRMWARE-SERVICES.md
 *.ida.py
 *_ghidra.java
 *.names.json
+docs/hexviewer-reading-animation.jpg
