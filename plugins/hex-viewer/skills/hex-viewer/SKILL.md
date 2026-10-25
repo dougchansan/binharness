@@ -12,6 +12,6 @@ description: Use when the user wants to view, inspect, or reverse engineer a bin
 - **Read code**: `disassemble` by address or symbol name; output annotates call targets and ADRP+ADD/LDR data refs with string previews. Follow callers with `find_xrefs`.
 - **Data**: `decode_struct` with a C-like layout, `read_binary_chunk` for raw bytes (`address` for NSO/NRO virtual addresses, `offset` for file offsets).
 - **Remember**: `annotate` labels/comments/notes as soon as you understand something; they persist per build id and show up in later disassembly. `get_annotations` to review.
-- `extract_image` writes a flat decompressed image + JSON symbols for Ghidra/IDA (never overwrites).
+- **Hand off to Ghidra/IDA**: `extract_image` writes the flat decompressed image; `export_symbols` writes Ghidra/IDA import scripts that apply every recovered function name, vtable, syscall wrapper and service label. Load the image at the base, run the script.
 
 Addresses are hex strings; NSO/NRO default base is 0x7100000000.
