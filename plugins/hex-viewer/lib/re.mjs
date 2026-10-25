@@ -405,6 +405,44 @@ export function emitGhidra(sym, meta) {
   return L.join("\n") + "\n";
 }
 
+// Java GhidraScript — runs in headless Ghidra with no Python/PyGhidra setup
+// (modern Ghidra runs .py only via PyGhidra, which is often not installed).
+// `className` must match the file's basename.
+export function emitGhidraJava(sym, meta, className) {
+  const j = (s) => '"' + [...s].map((c) => {
+    const n = c.codePointAt(0);
+    if (c === '"') return '\\"'; if (c === "\\") return "\\\\"; if (c === "\n") return "\\n"; if (c === "\t") return "\\t";
+    return n < 0x20 || n > 0x7e ? "\\u" + n.toString(16).padStart(4, "0") : c;
+  }).join("") + '"';
+  const L = [
+    `// Ghidra import script for ${meta.name} (${meta.programId || meta.buildId || ""}).`,
+    `// Load the extract_image output as a flat AARCH64:LE:64 binary at base ${hex(meta.base)}, then run this script.`,
+    `import ghidra.app.script.GhidraScript;`,
+    `import ghidra.program.model.symbol.SourceType;`,
+    `import ghidra.program.model.address.Address;`,
+    `import ghidra.program.model.listing.Function;`,
+    ``,
+    `public class ${className} extends GhidraScript {`,
+    `  public void run() throws Exception {`,
+    ...sym.functions.map((f) => `    mk(${f.addr}L, ${j(sanitize(f.name))});`),
+    ...sym.labels.map((l) => `    lbl(${l.addr}L, ${j(sanitize(l.name))});`),
+    ...sym.comments.map((c) => `    cmt(${c.addr}L, ${j(c.text)});`),
+    `    println("${meta.name}: ${sym.functions.length} functions, ${sym.labels.length} labels, ${sym.comments.length} comments");`,
+    `  }`,
+    `  void mk(long a, String n) throws Exception {`,
+    `    Address addr = toAddr(a);`,
+    `    Function f = getFunctionContaining(addr);`,
+    `    if (f == null) f = createFunction(addr, n);`,
+    `    if (f != null && f.getEntryPoint().equals(addr)) f.setName(n, SourceType.USER_DEFINED);`,
+    `    else createLabel(addr, n, true);`,
+    `  }`,
+    `  void lbl(long a, String n) throws Exception { createLabel(toAddr(a), n, true); }`,
+    `  void cmt(long a, String t) { setEOLComment(toAddr(a), t); }`,
+    `}`,
+  ];
+  return L.join("\n") + "\n";
+}
+
 export function emitIda(sym, meta) {
   const q = (s) => JSON.stringify(s);
   const L = [`# IDAPython import script for ${meta.name} (${meta.programId || meta.buildId || ""})`,

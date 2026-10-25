@@ -38,7 +38,9 @@ A reverse-engineering toolkit for stripped Nintendo Switch modules (and any bina
 | `annotate` / `get_annotations` | Labels, comments and notes, saved per build id in `~/.binharness/` and shown in later disassembly |
 | `extract_image` | Write the decompressed NSO/NRO image + JSON symbol map for Ghidra/IDA |
 
-**Hand-off to Ghidra/IDA.** `extract_image main out.bin` writes the decompressed image; `export_symbols main --out out` writes `out.ghidra.py` / `out.ida.py`. Load `out.bin` as a flat AArch64 binary at base `0x7100000000`, run the script, and every recovered function, vtable, syscall wrapper and service label is applied.
+**Hand-off to Ghidra/IDA.** `extract_image main out.bin` writes the decompressed image; `export_symbols main --out out` writes `out_ghidra.java` (+ `out.ghidra.py`) and `out.ida.py`. Load `out.bin` as a flat AArch64 binary at base `0x7100000000`, then run the script — every recovered function, vtable, syscall wrapper and service label is applied. Verified end-to-end on Ghidra 12.2 headless.
+
+Use the **`.java`** GhidraScript on modern Ghidra (12+) — it runs with no extra setup. The `.py` version needs [PyGhidra](https://github.com/NationalSecurityAgency/ghidra) enabled, which isn't on by default.
 
 Stripped Switch sysmodules (no symbol table, statically-linked SDK) are the main target: `list_functions` reconstructs the function layout, `scan_syscalls` shows the kernel interface, and `find_string_refs` gets you from an error message to the code. `extract_image` hands the rest off to Ghidra/IDA.
 

@@ -8,7 +8,7 @@ import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { hex, sext, page, segmentAt, seg, nearestName, decodeRef, extractStrings, findXrefs, warnOnce } from "./core.mjs";
 export { hex, segmentAt, extractStrings, findXrefs } from "./core.mjs";
-import { RE_TOOLS, listFunctions, callGraphTool, scanSyscallsTool, scanSyscalls, functionAt, SVC_NAMES, findServices, findServicesTool, parseNpdm, npdmTool, scanRtti, findRttiTool, getRelocations, collectSymbols, emitGhidra, emitIda, resolveThunk, scanNameStrings } from "./re.mjs";
+import { RE_TOOLS, listFunctions, callGraphTool, scanSyscallsTool, scanSyscalls, functionAt, SVC_NAMES, findServices, findServicesTool, parseNpdm, npdmTool, scanRtti, findRttiTool, getRelocations, collectSymbols, emitGhidra, emitGhidraJava, emitIda, resolveThunk, scanNameStrings } from "./re.mjs";
 
 export const MAX_CHUNK = 64 * 1024;
 export const DEFAULT_SWITCH_BASE = 0x7100000000;
@@ -747,7 +747,14 @@ export function callTool(name, args = {}) {
     const meta = { name: path.basename(path.dirname(file)) === "." ? path.basename(file) : path.basename(file), base: img.base, buildId: img.buildId };
     const out = resolvePath(args.out), fmt = args.format || "both", written = [];
     const write = (suffix, content) => { const f = out + suffix; if (fs.existsSync(f)) throw new Error(`${f} already exists`); fs.writeFileSync(f, content); written.push(f); };
-    if (fmt === "ghidra" || fmt === "both") write(".ghidra.py", emitGhidra(sym, meta));
+    const writeFile = (f, content) => { if (fs.existsSync(f)) throw new Error(`${f} already exists`); fs.writeFileSync(f, content); written.push(f); };
+    if (fmt === "ghidra" || fmt === "both") {
+      // Ghidra requires the public class name to equal the .java filename, so the
+      // Java script is written as <className>.java (no extra dots), not out+suffix.
+      const cls = (path.basename(out).replace(/[^A-Za-z0-9_]/g, "_").replace(/^(\d)/, "_$1") || "names") + "_ghidra";
+      writeFile(path.join(path.dirname(out), cls + ".java"), emitGhidraJava(sym, meta, cls)); // runs headless, no PyGhidra
+      write(".ghidra.py", emitGhidra(sym, meta));                                             // for GUI users with PyGhidra
+    }
     if (fmt === "ida" || fmt === "both") write(".ida.py", emitIda(sym, meta));
     if (fmt === "json") write(".names.json", JSON.stringify(sym, null, 1));
     const named = sym.functions.filter((f) => !/^sub_/.test(f.name)).length;
