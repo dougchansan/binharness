@@ -1,8 +1,14 @@
 ---
 name: hex-viewer
-description: Use when the user wants to view, inspect, or look inside a binary file (executables, object files, images, archives, ROM/ISO data, .dol/.rel/.bin, etc.) or when a file preview says binary files aren't supported.
+description: Use when the user wants to view, inspect, or reverse engineer a binary file (Switch NSO/NRO/NSP/XCI, executables, object files, ROM/ISO data, game assets, .bin/.dol/.rel) or when a file preview says binary files aren't supported.
 ---
 
-Call the `view_binary` tool with the file's absolute path (and optional `offset`) to open it in the interactive hex viewer. The viewer pages through the rest of the file itself, so don't re-call the tool just to scroll.
+- **Show the user a file**: `view_binary` opens the interactive hex viewer (it pages through the file itself; don't re-call it to scroll).
+- **Get your bearings**: `file_info` first. For NSO/NRO it reports segments, build id, module path and symbol counts; for NSP/XCI it lists contained files. NCA files are encrypted and unsupported; ask for extracted NSO/NRO.
+- **Find code**: `find_string_refs` (log/error strings → the functions that use them), `list_symbols` (demangled dynsym + saved labels), `search_bytes` (hex with `??` wildcards).
+- **Read code**: `disassemble` by address or symbol name; output annotates call targets and ADRP+ADD/LDR data refs with string previews. Follow callers with `find_xrefs`.
+- **Data**: `decode_struct` with a C-like layout, `read_binary_chunk` for raw bytes (`address` for NSO/NRO virtual addresses, `offset` for file offsets).
+- **Remember**: `annotate` labels/comments/notes as soon as you understand something; they persist per build id and show up in later disassembly. `get_annotations` to review.
+- `extract_image` writes a flat decompressed image + JSON symbols for Ghidra/IDA (never overwrites).
 
-Use `binary_strings` to pull printable strings, and `read_binary_chunk` when you need specific bytes for your own reasoning (it returns a text hexdump).
+Addresses are hex strings; NSO/NRO default base is 0x7100000000.

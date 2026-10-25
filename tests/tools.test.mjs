@@ -1,0 +1,52 @@
+// node --test tests/tools.test.mjs   (regenerates the fixture, then checks every tool against it)
+import { test, before } from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { execFileSync, spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const fixture = path.join(here, "fixture.nso");
+const home = fs.mkdtempSync(path.join(os.tmpdir(), "binharness-test-"));
+process.env.HOME = home; // annotations go to a throwaway ~/.binharness
+const { callTool } = await import("../plugins/hex-viewer/lib/bintools.mjs");
+const run = (name, args) => callTool(name, { path: fixture, ...args }).content[0].text;
+
+before(() => execFileSync(process.execPath, [path.join(here, "make-fixture.mjs")]));
+
+test("file_info parses NSO header and segments", () => {
+  const t = run("file_info");
+  assert.match(t, /Switch NSO executable/);
+  assert.match(t, /text\s+0x7100000000 - 0x7100001000\s+r-x\s+0x1000\s+\(lz4\)/);
+  assert.match(t, /module D:\\home\\fixture\\main\.nss/);
+});
+test("symbols are read and demangled", () => assert.match(run("list_symbols"), /nn::os::SleepThread\(nn::TimeSpan\)/));
+test("disassembly annotates calls and string refs", () => {
+  const t = run("disassemble", { symbol: "nnMain", count: 5 });
+  assert.match(t, /add x0, x0, #0x100\s+; 0x7100001100 "Hello Switch error %d"/);
+  assert.match(t, /bl 0x7100000020\s+; nn::os::SleepThread/);
+});
+test("find_xrefs finds the BL", () => assert.match(run("find_xrefs", { address: "0x7100000020" }), /710000000c\s+call\s+nnMain\+0xc/));
+test("find_string_refs links string to code", () => assert.match(run("find_string_refs", { text: "switch error" }), /<- 7100000008\s+nnMain\+0x8/));
+test("search_bytes with wildcards", () => assert.match(run("search_bytes", { pattern: "c0 03 ?? d6", segment: "text" }), /0x7100000010\n0x7100000020/));
+test("decode_struct", () => assert.match(run("decode_struct", { address: "0x7100001000", layout: "u32 zero; u32 len" }), /len: 24 \(0x18\)/));
+test("annotations persist and show in disassembly", () => {
+  run("annotate", { address: "0x7100000010", label: "main_epilogue", comment: "returns" });
+  assert.match(run("disassemble", { address: "0x7100000010", count: 1 }), /main_epilogue:\n\s+7100000010:\s+ret\s+\/\/ returns/);
+});
+test("compare_files", () => {
+  const b = path.join(home, "b.nso"); const buf = fs.readFileSync(fixture); buf[5] ^= 0xff; fs.writeFileSync(b, buf);
+  assert.match(callTool("compare_files", { path_a: fixture, path_b: b }).content[0].text, /0x5 \+1/);
+});
+test("harness runs a full tool loop against a mock API", async () => {
+  const mock = spawn(process.execPath, [path.join(here, "mock-deepseek.mjs"), fixture]);
+  const port = await new Promise((r) => mock.stdout.once("data", (d) => r(String(d).trim())));
+  let stderr = ""; mock.stderr.on("data", (d) => (stderr += d));
+  const outp = execFileSync(process.execPath, [path.join(here, "../harness/deepseek-bin.mjs"), "--base-url", `http://127.0.0.1:${port}`, "-p", "go", fixture], { env: { ...process.env, DEEPSEEK_API_KEY: "test-key" }, encoding: "utf8" });
+  mock.kill("SIGTERM");
+  await new Promise((r) => mock.once("exit", r));
+  assert.match(outp, /used by nnMain/);
+  assert.match(stderr, /MOCK OK \(3 requests\)/);
+});
