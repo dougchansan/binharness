@@ -1,8 +1,10 @@
-# Hex Viewer for Codex + deepseek-bin
+# binharness
 
-A binary-analysis toolkit for Nintendo Switch executables and any other file, packaged two ways:
+A reverse-engineering toolkit for stripped Nintendo Switch modules (and any binary), packaged three ways:
 
-- **Codex plugin**: an interactive hex viewer that renders inline in Codex (for when the file pane says *"Binary file previews aren't supported yet"*), plus 13 reverse-engineering tools Codex can call.
+- **Codex plugin** (`hex-viewer`): an interactive hex viewer that renders inline in Codex (for when the file pane says *"Binary file previews aren't supported yet"*), plus 24 RE tools Codex can call.
+- **MCP server**: the same tools for any MCP client (`npx -y binharness binharness-mcp`).
+- **`deepseek-bin`**: a DeepSeek CLI agent that drives the tools to reverse a module on its own.
 - **`deepseek-bin`**: a standalone CLI agent that uses the same tools with DeepSeek models.
 
 ![Hex Viewer showing a file with a search hit and the byte inspector](docs/screenshot.jpg)
@@ -46,7 +48,7 @@ NCA files are encrypted. This toolkit does not decrypt them or handle console ke
 ## Codex plugin
 
 ```bash
-codex plugin marketplace add dougchansan/codex-hex-viewer
+codex plugin marketplace add dougchansan/binharness
 codex plugin add hex-viewer@dougchansan
 ```
 
@@ -55,7 +57,7 @@ Restart Codex, then try *"Show `exefs/main` in the hex viewer"* or *"Find the fu
 ## deepseek-bin (DeepSeek CLI agent)
 
 ```bash
-git clone https://github.com/dougchansan/codex-hex-viewer && cd codex-hex-viewer
+git clone https://github.com/dougchansan/binharness && cd binharness
 export DEEPSEEK_API_KEY=sk-...        # https://platform.deepseek.com
 node harness/deepseek-bin.mjs exefs/main
 ```
@@ -94,7 +96,7 @@ The MCP server works with any MCP client. For [opencode](https://opencode.ai) wi
 {
   "model": "deepseek/deepseek-flash",
   "mcp": {
-    "binharness": { "type": "local", "command": ["node", "/path/to/codex-hex-viewer/plugins/hex-viewer/server.mjs"] }
+    "binharness": { "type": "local", "command": ["node", "/path/to/binharness/plugins/hex-viewer/server.mjs"] }
   }
 }
 ```

@@ -1,11 +1,28 @@
 {
-  "name": "codex-hex-viewer",
+  "name": "binharness",
   "version": "0.6.1",
-  "description": "Hex viewer + Switch binary RE toolkit for Codex (MCP) and a DeepSeek CLI agent",
+  "description": "Reverse-engineering toolkit for stripped Nintendo Switch modules (and any binary): hex viewer, NSO/NRO/NSP parsing, AArch64 disassembly, function/RTTI/syscall/service recovery, Ghidra/IDA export. Ships a Codex MCP plugin and a DeepSeek CLI agent.",
   "type": "module",
   "license": "MIT",
-  "bin": { "deepseek-bin": "harness/deepseek-bin.mjs" },
+  "bin": {
+    "deepseek-bin": "harness/deepseek-bin.mjs",
+    "binharness-mcp": "plugins/hex-viewer/server.mjs"
+  },
+  "files": [
+    "plugins/hex-viewer/lib",
+    "plugins/hex-viewer/server.mjs",
+    "plugins/hex-viewer/assets/app.html",
+    "harness",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": { "test": "node --test tests/tools.test.mjs" },
   "engines": { "node": ">=18" },
-  "repository": "github:dougchansan/codex-hex-viewer"
+  "keywords": [
+    "reverse-engineering", "nintendo-switch", "nso", "aarch64", "disassembler",
+    "hex-viewer", "mcp", "binary", "rtti", "ghidra", "ida", "deepseek"
+  ],
+  "homepage": "https://github.com/dougchansan/binharness",
+  "bugs": "https://github.com/dougchansan/binharness/issues",
+  "repository": "github:dougchansan/binharness"
 }

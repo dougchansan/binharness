@@ -1,0 +1,8 @@
+tests/
+docs/
+FIRMWARE-INDEX.md
+FIRMWARE-SERVICES.md
+.claude/
+.agents/
+*.nso
+fw-index.json

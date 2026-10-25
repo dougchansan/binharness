@@ -1,0 +1,20 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.github.dougchansan/binharness",
+  "description": "Reverse-engineering toolkit for stripped Nintendo Switch modules and any binary: hex viewer, NSO/NRO/NSP parsing, AArch64 disassembly, function/RTTI/syscall/service recovery, Ghidra/IDA export.",
+  "repository": { "url": "https://github.com/dougchansan/binharness", "source": "github" },
+  "version": "0.6.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "binharness",
+      "version": "0.6.1",
+      "transport": { "type": "stdio" },
+      "runtimeHint": "npx",
+      "runtimeArguments": [
+        { "type": "named", "name": "-y", "value": "binharness" },
+        { "type": "positional", "value": "binharness-mcp" }
+      ]
+    }
+  ]
+}
