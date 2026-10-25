@@ -125,9 +125,10 @@ function filesNote(files) {
 
 let currentAbort = null;
 
-async function chat() {
+async function chat(chatOpts = {}) {
   const body = {
-    model: opts.model, messages, tools, stream: true, stream_options: { include_usage: true },
+    model: opts.model, messages, stream: true, stream_options: { include_usage: true },
+    ...(chatOpts.noTools ? {} : { tools }),
     ...(opts.effort === "none" ? { thinking: { type: "disabled" } } : { thinking: { type: "enabled" }, reasoning_effort: opts.effort }),
   };
   currentAbort = new AbortController();
@@ -230,7 +231,12 @@ async function runTask(userText) {
       log({ role: "tool", name: call.function.name, args: call.function.arguments, chars: result.length });
     }
   }
-  out(yellow(`\n(stopped after ${opts.maxSteps} tool rounds; say "continue" to keep going)\n`));
+  // Budget exhausted — force a final answer with no tools so a one-shot run always concludes.
+  out(yellow(`\n(tool budget of ${opts.maxSteps} rounds reached — summarizing)\n`));
+  messages.push({ role: "user", content: "You've reached your tool-call budget. Stop investigating and give your best final answer now, concisely, from what you've already found. Do not request more tools." });
+  const final = await chat({ noTools: true });
+  messages.push(final);
+  return final.content;
 }
 
 // Deterministic recon: run the structure + naming passes on a module directly

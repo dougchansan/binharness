@@ -1,6 +1,6 @@
 {
   "name": "binharness",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Reverse-engineering toolkit for stripped Nintendo Switch modules (and any binary): hex viewer, NSO/NRO/NSP parsing, AArch64 disassembly, function/RTTI/syscall/service recovery, Ghidra/IDA export. Ships a Codex MCP plugin and a DeepSeek CLI agent.",
   "type": "module",
   "license": "MIT",

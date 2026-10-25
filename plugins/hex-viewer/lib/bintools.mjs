@@ -487,9 +487,12 @@ export function searchBytes(data, pat, base, max) {
 
 const STRUCT_TYPES = { u8: 1, s8: 1, i8: 1, u16: 2, s16: 2, i16: 2, u32: 4, s32: 4, i32: 4, u64: 8, s64: 8, i64: 8, f32: 4, f64: 8, ptr: 8, char: 1, bool: 1 };
 export function decodeStruct(data, off, layout, littleDefault = true, count = 1) {
-  const fields = layout.split(/[;\n]/).map((f) => f.trim()).filter(Boolean).map((f) => {
-    const m = f.match(/^(\w+?)(be|le)?\s+(\w+)(?:\[(\d+)\])?$/i) || f.match(/^(\w+?)(be|le)?(?:\[(\d+)\])\s+(\w+)$/i);
-    if (!m) throw new Error(`bad field: "${f}" (use e.g. "u32 magic; f32 pos[3]; char name[16]; u16be id")`);
+  const fields = layout.split(/[;\n]/).map((f) => f.trim()).filter(Boolean).map((f, idx) => {
+    // bare type (optionally with [n]), e.g. "ptr" or "u64[8]" — auto-name it
+    let m = f.match(/^(\w+?)(be|le)?(?:\[(\d+)\])?$/i);
+    if (m && STRUCT_TYPES[m[1].toLowerCase()]) return { type: m[1].toLowerCase(), le: m[2] ? m[2].toLowerCase() === "le" : littleDefault, name: `f${idx}`, n: m[3] ? +m[3] : 0 };
+    m = f.match(/^(\w+?)(be|le)?\s+(\w+)(?:\[(\d+)\])?$/i) || f.match(/^(\w+?)(be|le)?(?:\[(\d+)\])\s+(\w+)$/i);
+    if (!m) throw new Error(`bad field: "${f}" (use e.g. "u32 magic; f32 pos[3]; char name[16]; u16be id", or a bare type like "ptr")`);
     const [type, end, name, n] = m[4] !== undefined && /^\d+$/.test(m[3]) ? [m[1], m[2], m[4], m[3]] : [m[1], m[2], m[3], m[4]];
     if (!STRUCT_TYPES[type.toLowerCase()]) throw new Error(`unknown type ${type}`);
     return { type: type.toLowerCase(), le: end ? end.toLowerCase() === "le" : littleDefault, name, n: n ? +n : 0 };
