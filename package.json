@@ -9,7 +9,11 @@
     "binharness-mcp": "plugins/hex-viewer/server.mjs"
   },
   "files": [
-    "plugins/hex-viewer/lib",
+    "plugins/hex-viewer/lib/core.mjs",
+    "plugins/hex-viewer/lib/bintools.mjs",
+    "plugins/hex-viewer/lib/re.mjs",
+    "plugins/hex-viewer/lib/assets.mjs",
+    "plugins/hex-viewer/lib/nso-integrity.mjs",
     "plugins/hex-viewer/server.mjs",
     "plugins/hex-viewer/assets/app.html",
     "harness",
