@@ -55,6 +55,7 @@ Nintendo SDK**. Linked documents retain their own terms and licenses.
 | NSO/NRO parsing in `bintools.mjs` | Switchbrew's [NSO0](https://switchbrew.org/wiki/NSO0) and [NRO0](https://switchbrew.org/wiki/NRO0) layout documentation. NSO0 describes separate text/rodata/data segments and optional LZ4 compression; NRO0 documents its header at offset `0x10`. |
 | NPDM parsing and synthetic metadata | Switchbrew's [NPDM](https://switchbrew.org/wiki/NPDM), especially ACI0, Service Access Control, and KernelCapability. The service server bit describes permission to register a service; it does not prove a module actually registers or implements it at runtime. |
 | Horizon syscall-name lookup | Switchbrew's [SVC table](https://switchbrew.org/wiki/SVC), including `0x0B` / `SleepThread`, the fixture's test case. Firmware annotations in that reference matter; a lookup table is not a version-aware behavioral specification. |
+| NSO SHA-256 header hashes and ZBIC selection | [Switchbrew NSO0](https://switchbrew.org/wiki/NSO0) describes flags 3–5 for hashes, bit 7 for ZBIC and SHA-256 offsets 0xA0/0xC0/0xE0. Optional NSO decompression may invoke an independently installed [alula/beetool at 965a13a](https://github.com/alula/beetool/tree/965a13a6b6d0efa9123c4c03dd3a8e80e346717c) (hactool-derived, ISC); no beetool code, binaries or dependencies are copied here. |
 | LZ4 block encoder/decoder | The LZ4 project's [Block Format Description](https://github.com/lz4/lz4/blob/dev/doc/lz4_Block_format.md): token fields, literals, match offsets, length extensions, and block-ending conditions. This specifies the format rather than this repository's implementation provenance. |
 | RTTI and symbol-name handling | The [Itanium C++ ABI](https://itanium-cxx-abi.github.io/cxx-abi/abi.html), sections 2.5 (virtual tables), 2.9 (RTTI), and 5.1 (name mangling). Recovering candidate structures from bytes remains heuristic and does not certify reconstructed classes or function names. |
 
@@ -67,6 +68,8 @@ output. An exported decompressed image contains input bytes. Hex dumps,
 disassembly, strings, symbol scripts, reports, and screenshots can also expose
 material from the input; generating them does not automatically make that
 material MIT-licensed.
+
+The synthetic fixture now sets NSO hash-enable bits and computes section SHA-256 values from its generated buffers. `tests/nso-integrity.test.mjs` builds an independently specified byte oracle and compares the decoded bytes and hashes. It also has a mock ZBIC helper protocol test, which **does not prove real ZBIC codec compatibility**, and a separately enabled differential test against an installed beetool executable on the synthetic LZ4 fixture. No retail inputs are used in those tests.
 
 The toolkit analyzes supplied files. It does not implement NCA decryption or
 console-key handling. That functionality boundary does not certify how an input

@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
+import { expandZbicNso, verifyNsoHashes } from "./nso-integrity.mjs";
 import { spawnSync } from "node:child_process";
 import { hex, sext, page, segmentAt, seg, nearestName, decodeRef, extractStrings, findXrefs, warnOnce } from "./core.mjs";
 export { hex, segmentAt, extractStrings, findXrefs } from "./core.mjs";
@@ -185,7 +186,7 @@ export function openImage(file, opts = {}) {
   file = resolvePath(file);
   const st = fs.statSync(file);
   const baseOpt = parseNum(opts.base);
-  const key = `${file}|${st.mtimeMs}|${baseOpt ?? ""}|${opts.arch ?? ""}`;
+  const key = `${file}|${st.mtimeMs}|${st.size}|${baseOpt ?? ""}|${opts.arch ?? ""}|${process.env.BINHARNESS_BEETOOL || ""}`;
   if (imageCache.has(key)) return imageCache.get(key);
   const raw = fs.readFileSync(file);
   let img;
@@ -206,33 +207,44 @@ export function openImage(file, opts = {}) {
   return img;
 }
 
-function loadNso(b, base) {
-  const flags = b.readUInt32LE(0x0c);
+function loadNso(original, base) {
+  if (original.length < 0x100) throw new Error("truncated NSO0 header");
+  const flags = original.readUInt32LE(0x0c);
+  const zbic = !!((flags & 0x80) && (flags & 0x7));
+  const b = zbic ? expandZbicNso(original) : original;
+  const decodedFlags = b.readUInt32LE(0x0c);
   const seg = (h, fsz, i, name, perm) => ({
     name, perm, fileOffset: b.readUInt32LE(h), memOffset: b.readUInt32LE(h + 4), size: b.readUInt32LE(h + 8),
-    fileSize: b.readUInt32LE(fsz), compressed: !!(flags & (1 << i)),
+    fileSize: b.readUInt32LE(fsz), compressed: !!(decodedFlags & (1 << i)),
+    compression: (flags & (1 << i)) ? (flags & 0x80 ? "zbic" : "lz4") : "none",
   });
   const segs = [seg(0x10, 0x60, 0, "text", "r-x"), seg(0x20, 0x64, 1, "rodata", "r--"), seg(0x30, 0x68, 2, "data", "rw-")];
   const bss = b.readUInt32LE(0x3c);
   const end = Math.max(...segs.map((s) => s.memOffset + s.size));
+  if (end + bss > 512 * 1024 * 1024) throw new Error("NSO0 expanded image exceeds 512 MiB");
   const data = new Uint8Array(end + bss);
   for (const s of segs) {
-    const src = b.subarray(s.fileOffset, s.fileOffset + s.fileSize);
-    data.set(s.compressed ? lz4Decompress(src, s.size) : src.subarray(0, s.size), s.memOffset);
+    const bytes = s.compressed ? s.fileSize : s.size;
+    if (s.fileOffset < 0x100 || s.fileOffset + bytes > b.length) {
+      throw new Error("NSO0 segment " + s.name + " extends beyond file bounds");
+    }
+    const src = b.subarray(s.fileOffset, s.fileOffset + bytes);
+    data.set(s.compressed ? lz4Decompress(src, s.size) : src, s.memOffset);
   }
   const ro = segs[1].memOffset;
   const img = {
     kind: "nso", base, data, bssSize: bss,
-    buildId: Buffer.from(b.subarray(0x40, 0x60)).toString("hex").replace(/(00)+$/, ""),
-    segments: [...segs.map((s) => ({ name: s.name, start: s.memOffset, size: s.size, perm: s.perm, compressed: s.compressed })),
+    hashes: verifyNsoHashes(original, data, segs),
+    compression: zbic ? "zbic (external beetool)" : "lz4/none",
+    buildId: Buffer.from(original.subarray(0x40, 0x60)).toString("hex").replace(/(00)+$/, ""),
+    segments: [...segs.map((s) => ({ name: s.name, start: s.memOffset, size: s.size, perm: s.perm, compressed: s.compressed, compression: s.compression })),
       { name: "bss", start: end, size: bss, perm: "rw-" }],
     dynstr: { off: ro + b.readUInt32LE(0x90), size: b.readUInt32LE(0x94) },
     dynsym: { off: ro + b.readUInt32LE(0x98), size: b.readUInt32LE(0x9c) },
   };
-  // Module path usually sits at the start of rodata: u32 0, u32 len, chars.
   const dv = new DataView(data.buffer);
   const plen = data.length >= ro + 8 ? dv.getUint32(ro + 4, true) : 0;
-  if (plen > 0 && plen < 0x200) img.modulePath = readCStr(data, ro + 8, plen);
+  if (plen > 0 && plen < 0x200 && ro + 8 + plen <= data.length) img.modulePath = readCStr(data, ro + 8, plen);
   return img;
 }
 
@@ -464,6 +476,8 @@ const BASE = { type: "string", description: "Override load base address (default
 export const TOOLS = [
   { name: "file_info", description: "Identify format signatures and summarize supported structures. NSO/NRO: segments and available symbol metadata. NSP/XCI/PFS0/HFS0: container entries. NPDM: ACI0 declarations without ACID signature verification. Other detected formats receive a raw header preview, not a format-specific loader. Start here.",
     inputSchema: { type: "object", properties: { path: P, base: BASE }, required: ["path"] } },
+  { name: "verify_nso", description: "Check enabled SHA-256 hashes of decompressed NSO text/rodata/data; report missing flags separately. ZBIC needs an explicitly configured beetool executable.",
+    inputSchema: { type: "object", properties: { path: P, base: BASE }, required: ["path"] } },
   { name: "read_binary_chunk", description: "Read bytes as a hexdump (or base64). Use `offset` for raw file offsets, or `address` for NSO/NRO virtual addresses (decompressed image). Max 64 KiB.",
     inputSchema: { type: "object", properties: { path: P, offset: { type: "integer", minimum: 0 }, address: ADDR, length: { type: "integer", minimum: 1, maximum: MAX_CHUNK, default: 256 }, format: { type: "string", enum: ["hex", "base64"], default: "hex" }, base: BASE }, required: ["path"] } },
   { name: "binary_strings", description: "List printable strings with addresses (like `strings -t x`). For NSO/NRO scans the decompressed image (default rodata). `filter` is a case-insensitive regex.",
@@ -487,7 +501,7 @@ export const TOOLS = [
   { name: "get_annotations", description: "Return saved labels, comments and notes for this binary.",
     inputSchema: { type: "object", properties: { path: P, base: BASE }, required: ["path"] } },
   { name: "extract_image", description: "Write the input's decompressed NSO/NRO image to `out` as a flat binary, plus an `out.json` sidecar with segments and symbols for Ghidra/IDA. Refuses an existing binary output path; an existing sidecar can be replaced. The exported bytes remain derived from the input.",
-    inputSchema: { type: "object", properties: { path: P, out: { type: "string" }, base: BASE }, required: ["path", "out"] } },
+    inputSchema: { type: "object", properties: { path: P, out: { type: "string" }, base: BASE, ignore_hash_mismatch: { type: "boolean", description: "Explicitly export even when an enabled NSO segment SHA-256 mismatches." } }, required: ["path", "out"] } },
 ];
 TOOLS.push({
   name: "viewer_activity",
@@ -599,7 +613,8 @@ export function callTool(name, args = {}) {
     if (isExe) {
       const img = openImage(file, args);
       lines.push(`base ${hex(img.base)}  build id ${img.buildId || "-"}${img.modulePath ? "  module " + img.modulePath : ""}`);
-      for (const s of img.segments) lines.push(`  ${s.name.padEnd(7)} ${hex(img.base + s.start)} - ${hex(img.base + s.start + s.size)}  ${s.perm}  ${hex(s.size)}${s.compressed ? "  (lz4)" : ""}`);
+      for (const s of img.segments) lines.push(`  ${s.name.padEnd(7)} ${hex(img.base + s.start)} - ${hex(img.base + s.start + s.size)}  ${s.perm}  ${hex(s.size)}${s.compression && s.compression !== "none" ? "  (" + s.compression + ")" : ""}`);
+      if (img.kind === "nso") lines.push("SHA-256: " + img.hashes.map((h) => h.name + "=" + h.status).join(", "));
       const f = img.symbols.filter((s) => !s.imported).length;
       lines.push(`symbols: ${img.symbols.length} (${f} defined, ${img.symbols.length - f} imported); labels: ${img.sortedNamed.length - new Set(img.symbols.filter((s) => s.addr).map((s) => s.addr)).size} saved`);
     } else if (/NPDM/.test(format || "")) {
@@ -612,6 +627,17 @@ export function callTool(name, args = {}) {
       for (const p of x.partitions) { lines.push(`  [${p.name}] @${hex(p.offset)} ${p.size} bytes`); for (const f of p.files || []) lines.push(`      ${f.name}  ${f.size} bytes`); }
     } else lines.push("", hexdump(head.buf.subarray(0, 256), 0));
     return text(lines.join("\n"), { path: file, size: head.size, format });
+  }
+
+  if (name === "verify_nso") {
+    if (format !== "Switch NSO executable") throw new Error("verify_nso requires an NSO0 file");
+    const img = openImage(file, args);
+    const mismatches = img.hashes.filter((h) => h.status === "mismatch").length;
+    const checked = img.hashes.filter((h) => h.enabled).length;
+    const lines = img.hashes.map((h) => h.name + ": " + h.status + " (" + h.bytes + " bytes)" +
+      (h.enabled ? "\n  expected " + h.expected + "\n  actual   " + h.actual : ""));
+    return text("NSO SHA-256: " + (mismatches ? "MISMATCH" : checked ? "verified enabled segments" : "no enabled hash flags") + "\n" + lines.join("\n"),
+      { valid: mismatches === 0, checked, mismatches, segments: img.hashes });
   }
 
   if (name === "read_binary_chunk") {
@@ -649,6 +675,9 @@ export function callTool(name, args = {}) {
   if (name === "extract_image") {
     if (!isExe) throw new Error("extract_image needs an NSO or NRO");
     const img = openImage(file, args), out = resolvePath(args.out);
+    if (img.kind === "nso" && !args.ignore_hash_mismatch && img.hashes.some((h) => h.status === "mismatch")) {
+      throw new Error("NSO SHA-256 hash mismatch: extraction blocked unless ignore_hash_mismatch is true");
+    }
     if (fs.existsSync(out)) throw new Error(`${out} already exists`);
     fs.writeFileSync(out, img.data);
     fs.writeFileSync(out + ".json", JSON.stringify({ source: file, base: hex(img.base), buildId: img.buildId, segments: img.segments.map((s) => ({ ...s, start: hex(img.base + s.start) })), symbols: img.symbols.filter((s) => s.addr).map((s) => ({ name: s.name, demangled: s.demangled, addr: hex(s.addr), size: s.size, type: s.type })) }, null, 2));

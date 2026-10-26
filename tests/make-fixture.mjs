@@ -1,6 +1,7 @@
 // Builds tests/fixture.nso: a tiny synthetic Switch NSO (LZ4-compressed segments,
 // hand-encoded AArch64, a string xref, dynsym symbols). No real game data.
 import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -58,12 +59,13 @@ const data = Buffer.alloc(DATA, 0xab);
 
 const segs = [text, ro, data].map((s) => lz4Compress(s));
 const hdr = Buffer.alloc(0x100);
-hdr.write("NSO0", 0, "latin1"); hdr.writeUInt32LE(7, 0x0c);
+hdr.write("NSO0", 0, "latin1"); hdr.writeUInt32LE(0x3f, 0x0c); // 3 compressed sections and 3 enabled SHA-256 hashes
 let fo = 0x100; const mem = [0, TEXT, TEXT + RO], sizes = [TEXT, RO, DATA];
 [0x10, 0x20, 0x30].forEach((h, i) => { hdr.writeUInt32LE(fo, h); hdr.writeUInt32LE(mem[i], h + 4); hdr.writeUInt32LE(sizes[i], h + 8); hdr.writeUInt32LE(segs[i].length, 0x60 + i * 4); fo += segs[i].length; });
 hdr.writeUInt32LE(BSS, 0x3c);
 Buffer.from("0123456789abcdef0123456789abcdef", "hex").copy(hdr, 0x40);
 hdr.writeUInt32LE(strOff, 0x90); hdr.writeUInt32LE(p, 0x94); hdr.writeUInt32LE(symOff, 0x98); hdr.writeUInt32LE(4 * 24, 0x9c);
-const out = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixture.nso");
+for (const [i, section] of [text, ro, data].entries()) crypto.createHash("sha256").update(section).digest().copy(hdr, 0xa0 + 32 * i);
+const out = process.argv[2] ? path.resolve(process.argv[2]) : path.join(path.dirname(fileURLToPath(import.meta.url)), "fixture.nso");
 fs.writeFileSync(out, Buffer.concat([hdr, ...segs]));
 console.log(`wrote ${out} (${fs.statSync(out).size} bytes; text compressed ${TEXT} -> ${segs[0].length})`);
