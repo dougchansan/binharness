@@ -9,6 +9,7 @@ import { expandZbicNso, verifyNsoHashes } from "./nso-integrity.mjs";
 import { spawnSync } from "node:child_process";
 import { hex, sext, page, segmentAt, seg, nearestName, decodeRef, extractStrings, findXrefs, warnOnce } from "./core.mjs";
 export { hex, segmentAt, extractStrings, findXrefs } from "./core.mjs";
+import { decompress, parseByml, parseBntx, parseBfres } from "./assets.mjs";
 import { RE_TOOLS, listFunctions, callGraphTool, scanSyscallsTool, scanSyscalls, functionAt, SVC_NAMES, findServices, findServicesTool, parseNpdm, npdmTool, scanRtti, findRttiTool, getRelocations, collectSymbols, emitGhidra, emitGhidraJava, emitIda, resolveThunk, scanNameStrings } from "./re.mjs";
 
 export const MAX_CHUNK = 64 * 1024;
@@ -546,6 +547,16 @@ TOOLS.push({
   inputSchema: { type: "object", properties: { path: { type: "string" }, base: { type: "string" }, dry_run: { type: "boolean" } }, required: ["path"] },
   annotations: { readOnlyHint: false },
 });
+TOOLS.push(
+  { name: "decompress", description: "Decompress a Zstandard (.zs), Yaz0, gzip or zlib file. With `out`, writes the decompressed bytes; otherwise reports the format/size and a hexdump preview.",
+    inputSchema: { type: "object", properties: { path: { type: "string" }, out: { type: "string", description: "Optional output file (won't overwrite)." } }, required: ["path"] }, annotations: { readOnlyHint: false } },
+  { name: "parse_byml", description: "Parse a BYML / BGYML (Nintendo binary YAML) file into JSON. Auto-decompresses a Zstandard/Yaz0-wrapped input first.",
+    inputSchema: { type: "object", properties: { path: { type: "string" }, max_chars: { type: "integer", default: 12000 } }, required: ["path"] }, annotations: { readOnlyHint: true } },
+  { name: "parse_bntx", description: "List the textures in a BNTX container (name, format, width/height/depth, mip and array counts). Structure-level; does not decode/de-swizzle pixels.",
+    inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] }, annotations: { readOnlyHint: true } },
+  { name: "parse_bfres", description: "Summarize a BFRES (FRES) resource: version, name, and the model/skeleton/shape/material blocks and any embedded BNTX texture container it contains. Structure-level.",
+    inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] }, annotations: { readOnlyHint: true } },
+);
 for (const t of TOOLS) t.annotations = {
   ...t.annotations,
   readOnlyHint: t.annotations?.readOnlyHint ?? !["annotate", "extract_image"].includes(t.name),
@@ -587,6 +598,22 @@ export function callTool(name, args = {}) {
     }
     const lines = diffs.map((d) => `${hex(d.offset)} +${d.length}:  ${Buffer.from(A.subarray(d.offset - off, d.offset - off + Math.min(d.length, 16))).toString("hex")}  vs  ${Buffer.from(B.subarray(d.offset - off, d.offset - off + Math.min(d.length, 16))).toString("hex")}`);
     return text(`sizes: ${sa} vs ${sb}\n${diffs.length ? lines.join("\n") : "no differences in range"}`, { diffs });
+  }
+
+  if (name === "decompress" || name === "parse_byml" || name === "parse_bntx" || name === "parse_bfres") {
+    const f = resolvePath(args.path);
+    let buf = fs.readFileSync(f);
+    if (name === "decompress") {
+      const r = decompress(buf);
+      if (args.out) { const o = resolvePath(args.out); if (fs.existsSync(o)) throw new Error(`${o} already exists`); fs.writeFileSync(o, r.data); return { content: [{ type: "text", text: `${r.format}: ${buf.length} -> ${r.data.length} bytes, wrote ${o}` }], structuredContent: { format: r.format, inSize: buf.length, outSize: r.data.length, out: o } }; }
+      return { content: [{ type: "text", text: `${r.format}: ${buf.length} -> ${r.data.length} bytes\n${hexdump(r.data.subarray(0, 256), 0)}${r.data.length > 256 ? "\n…" : ""}` }], structuredContent: { format: r.format, inSize: buf.length, outSize: r.data.length } };
+    }
+    // auto-decompress wrapped assets before parsing
+    const m = buf.subarray(0, 4);
+    if (m.toString("latin1") === "Yaz0" || (buf[0] === 0x28 && buf[1] === 0xb5) || buf[0] === 0x1f && buf[1] === 0x8b) { try { buf = decompress(buf).data; } catch { /* parse raw */ } }
+    if (name === "parse_byml") { const r = parseByml(buf); const json = JSON.stringify(r.root, null, 1); const max = args.max_chars || 12000; return { content: [{ type: "text", text: `BYML v${r.version} (${r.le ? "little" : "big"}-endian)\n${json.length > max ? json.slice(0, max) + "\n…[truncated]" : json}` }], structuredContent: r }; }
+    if (name === "parse_bntx") { const r = parseBntx(buf); return { content: [{ type: "text", text: `BNTX "${r.fileName}" v${r.version}, ${r.textures.length} textures:\n` + r.textures.map((t) => `  ${t.name}  ${t.width}x${t.height}${t.depth > 1 ? "x" + t.depth : ""}  fmt ${t.format}  ${t.mipCount} mips${t.arrayCount > 1 ? ", " + t.arrayCount + " layers" : ""}`).join("\n") }], structuredContent: r }; }
+    if (name === "parse_bfres") { const r = parseBfres(buf); return { content: [{ type: "text", text: `BFRES "${r.name}" v${r.version}\nblocks: ${r.models.map((b) => b.block + "@" + b.offset).join(", ") || "none"}\nembedded textures: ${r.textureContainer ? "BNTX@" + r.textureContainer.offset : "none"}` }], structuredContent: r }; }
   }
 
   if (name === "parse_npdm") {

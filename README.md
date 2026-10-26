@@ -37,6 +37,12 @@ A binary-analysis toolkit focused on Nintendo Switch NSO/NRO modules, with raw-b
 | `compare_files` | Byte-level diff of two files |
 | `annotate` / `get_annotations` | Labels, comments and notes, saved per build id in `~/.binharness/` and shown in later disassembly |
 | `extract_image` | Write the decompressed NSO/NRO image + JSON symbol map for Ghidra/IDA |
+| `decompress` | Decompress a **Zstandard** (`.zs`), **Yaz0**, gzip or zlib file (writes the output or previews it) |
+| `parse_byml` | Parse **BYML/BGYML** (Nintendo binary YAML) to JSON; auto-decompresses a Zstd/Yaz0-wrapped input |
+| `parse_bntx` | List the textures in a **BNTX** container (name, format, dimensions, mips) — structure only, no pixel decode |
+| `parse_bfres` | Summarize a **BFRES** resource: version, name, model/skeleton blocks, embedded BNTX — structure only |
+
+> Asset support: `decompress` and `parse_byml` are validated; `parse_bntx`/`parse_bfres` read the container structure (contents listing), not full texture/model decode, and haven't yet been run against a large corpus of real files.
 
 ### Hand-off to Ghidra/IDA
 

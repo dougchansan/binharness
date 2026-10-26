@@ -35,3 +35,4 @@ FIRMWARE-SERVICES.md
 *_ghidra.java
 *.names.json
 docs/hexviewer-reading-animation.jpg
+plugins/hex-viewer/lib/nca.mjs

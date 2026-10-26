@@ -19,7 +19,7 @@ before(() => execFileSync(process.execPath, [path.join(here, "make-fixture.mjs")
 test("tool annotations distinguish persistent writes from reads", () => {
   const writes = new Set([
     "annotate", "extract_image", "export_symbols", "label_syscalls",
-    "label_rtti", "label_services", "label_from_strings",
+    "label_rtti", "label_services", "label_from_strings", "decompress",
   ]);
   for (const tool of TOOLS) {
     assert.equal(tool.annotations?.readOnlyHint, !writes.has(tool.name), tool.name);

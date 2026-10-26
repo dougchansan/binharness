@@ -33,3 +33,4 @@ romfs/
 *.ida.py
 *_ghidra.java
 *.names.json
+plugins/hex-viewer/lib/nca.mjs

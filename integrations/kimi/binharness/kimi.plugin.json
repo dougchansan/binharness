@@ -1,7 +1,7 @@
 {
   "$schema": "https://catalog.msh.team/misc/kimi.plugin.schema.json",
   "name": "binharness",
-  "version": "0.6.7",
+  "version": "0.7.0",
   "description": "Reverse engineer stripped Nintendo Switch modules (NSO/NRO/NSP) and any binary: hex viewer, AArch64 disassembly, function/RTTI/syscall/service recovery, NPDM parsing, and Ghidra/IDA export.",
   "keywords": ["binary", "reverse-engineering", "nintendo-switch", "nso", "aarch64", "disassembler", "hex", "rtti", "ghidra"],
   "author": "dougchansan",
